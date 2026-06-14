@@ -26,6 +26,7 @@ from models import (
     SSEError,
     SSEVerdictChunk,
     SSESpeechChunk,
+    SSEStateSnapshot,
     DebateState,
 )
 from sse_bridge import sse_bridge
@@ -80,6 +81,20 @@ class DebateFlow(Flow[DebateState]):
             ),
         )
 
+    def _push_state_snapshot(self) -> None:
+        sse_bridge.push(
+            self.debate_id,
+            SSEStateSnapshot(
+                debate_id=self.debate_id,
+                current_round=self.state.current_round,
+                total_rounds=self.state.total_rounds,
+                current_phase=self.state.current_phase,
+                current_debater=self.state.current_debater,
+                debater_status=self.state.debater_status,
+                paused=self.state.paused,
+            ),
+        )
+
     async def _persist_speech(
         self,
         debater: str,
@@ -121,6 +136,10 @@ class DebateFlow(Flow[DebateState]):
         Returns the agent's output string.
         """
         await self._check_pause()
+
+        self.state.current_debater = debater_key
+        self.state.debater_status[debater_key] = "speaking"
+        self._push_state_snapshot()
 
         self.state.current_phase = phase
         self._push_phase_start(phase, debater_key, self.state.current_round)
@@ -164,6 +183,10 @@ class DebateFlow(Flow[DebateState]):
 
         self._push_phase_end(phase, debater_key)
 
+        self.state.debater_status[debater_key] = "done"
+        self.state.current_debater = ""
+        self._push_state_snapshot()
+
         self.state.debate_history.append(
             {
                 "debater": debater_key,
@@ -180,9 +203,16 @@ class DebateFlow(Flow[DebateState]):
 
     @start()
     async def begin_debate(self) -> None:
-        """Initialize debate state — round = 1, phase = begin."""
+        """Initialize debate state — round = 1, all debaters waiting."""
         self.state.current_phase = "begin"
         self.state.current_round = 1
+        self.state.current_debater = ""
+        self.state.debater_status = {
+            "pro_1": "waiting", "pro_2": "waiting", "pro_3": "waiting",
+            "con_1": "waiting", "con_2": "waiting", "con_3": "waiting",
+            "judge": "waiting",
+        }
+        self._push_state_snapshot()
 
     @listen("begin_debate")
     async def pro_1_opening(self) -> str:
