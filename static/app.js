@@ -60,55 +60,14 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('pause-btn').addEventListener('click', pauseDebate);
     document.getElementById('resume-btn').addEventListener('click', resumeDebate);
     document.getElementById('new-debate-btn').addEventListener('click', resetToNewDebate);
+    document.getElementById('back-list-btn').addEventListener('click', showHistoryPanel);
 
-    // Check for active debate on page load (reconnection)
-    checkActiveDebate();
+    loadDebateList();
 });
 
-// ── Reconnection: check for unfinished debate ──
+// Page load now handled by loadDebateList() — history list is default view.
 async function checkActiveDebate() {
-    try {
-        const resp = await fetch('/api/debate/active');
-        const data = await resp.json();
-        if (data.active && data.debate) {
-            const debate = data.debate;
-            currentDebateId = debate.id;
-
-            // Hide config, show debate grid
-            document.getElementById('debate-grid').style.display = 'grid';
-            document.getElementById('control-bar').style.display = 'flex';
-            document.getElementById('verdict-section').style.display = 'none';
-            document.getElementById('config-panel').style.display = 'none';
-            document.getElementById('new-debate-btn').style.display = 'inline-block';
-
-            // Restore control info
-            updateControlInfoFromDebate(debate);
-
-            // Restore past speeches into cells
-            restoreSpeeches(debate.speeches || []);
-
-            // If debate is finished, show verdict if available
-            if (debate.status === 'finished') {
-                if (debate.verdict && debate.winner) {
-                    showVerdict(debate.verdict, debate.winner);
-                }
-                document.getElementById('pause-btn').disabled = true;
-                document.getElementById('resume-btn').disabled = true;
-                return;
-            }
-
-            // Connect SSE for live events
-            connectSSE(currentDebateId);
-
-            // If debate was paused, set button states
-            if (debate.status === 'paused') {
-                document.getElementById('pause-btn').disabled = true;
-                document.getElementById('resume-btn').disabled = false;
-            }
-        }
-    } catch (err) {
-        console.error('Failed to check active debate:', err);
-    }
+    loadDebateList();
 }
 
 function restoreSpeeches(speeches) {
@@ -192,6 +151,7 @@ function resetToNewDebate() {
     document.getElementById('control-bar').style.display = 'none';
     document.getElementById('verdict-section').style.display = 'none';
     document.getElementById('new-debate-btn').style.display = 'none';
+    document.getElementById('back-list-btn').style.display = 'none';
 
     clearAllCells();
 
@@ -275,6 +235,8 @@ async function startDebate() {
 
         // Show debate grid, hide verdict
         document.getElementById('debate-grid').style.display = 'grid';
+        document.getElementById('history-panel').style.display = 'none';
+        document.getElementById('back-list-btn').style.display = 'inline-block';
         document.getElementById('control-bar').style.display = 'flex';
         document.getElementById('verdict-section').style.display = 'none';
         document.getElementById('config-panel').style.display = 'none';
@@ -330,6 +292,7 @@ function handleSSEMessage(msg) {
             }
 
             restoreSpeeches(msg.speeches || []);
+            updateAllStatusBadges(msg.debater_status || {});
 
             if (msg.status === 'finished' && msg.verdict) {
                 showVerdict(msg.verdict, msg.winner);
@@ -340,9 +303,13 @@ function handleSSEMessage(msg) {
 
         case 'state_snapshot':
             updateControlInfo(msg.current_round, msg.total_rounds, msg.current_phase);
+            updateAllStatusBadges(msg.debater_status || {});
             if (msg.paused) {
                 document.getElementById('pause-btn').disabled = true;
                 document.getElementById('resume-btn').disabled = false;
+            } else {
+                document.getElementById('pause-btn').disabled = false;
+                document.getElementById('resume-btn').disabled = true;
             }
             break;
 
@@ -357,9 +324,6 @@ function handleSSEMessage(msg) {
             activeSpeaker = msg.debater;
             const cell = document.getElementById(`cell-${msg.debater}`);
             if (cell) cell.classList.add('active');
-            const status = document.getElementById(`status-${msg.debater}`);
-            if (status) status.textContent = '发言中...';
-
             updateControlInfo(msg.round_num, null, msg.phase);
 
             // Clear thinking/speech for this debater
@@ -387,8 +351,6 @@ function handleSSEMessage(msg) {
             break;
 
         case 'phase_end':
-            const endStatus = document.getElementById(`status-${msg.debater}`);
-            if (endStatus) endStatus.textContent = '已完成';
             break;
 
         case 'verdict_chunk':
@@ -491,6 +453,171 @@ function clearAllCells() {
         clearRenderQueue(key);
     });
     activeSpeaker = null;
+}
+
+// ── History List ──
+async function loadDebateList() {
+    try {
+        const [debatesResp, activeResp] = await Promise.all([
+            fetch('/api/debates'),
+            fetch('/api/debate/active'),
+        ]);
+        const debatesData = await debatesResp.json();
+        const debates = debatesData.debates || [];
+
+        const activeDebates = debates.filter(d => d.status === 'running' || d.status === 'paused');
+        const historyDebates = debates.filter(d => d.status === 'finished');
+
+        // Show history panel, hide everything else
+        document.getElementById('history-panel').style.display = 'block';
+        document.getElementById('config-panel').style.display = 'none';
+        document.getElementById('debate-grid').style.display = 'none';
+        document.getElementById('control-bar').style.display = 'none';
+        document.getElementById('verdict-section').style.display = 'none';
+        document.getElementById('new-debate-btn').style.display = 'none';
+        document.getElementById('back-list-btn').style.display = 'none';
+
+        // Render sections
+        renderDebateSection('active-debates-section', '进行中', activeDebates);
+        renderDebateSection('history-debates-section', '已完成', historyDebates);
+
+        const emptyEl = document.getElementById('history-empty');
+        emptyEl.style.display = debates.length === 0 ? 'block' : 'none';
+    } catch (err) {
+        console.error('Failed to load debate list:', err);
+    }
+}
+
+function renderDebateSection(containerId, title, debates) {
+    const container = document.getElementById(containerId);
+    if (debates.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = `<div class="history-section-title">${title}</div>`;
+    debates.forEach(d => {
+        const statusLabels = { running: '进行中', paused: '已暂停', finished: '已完成' };
+        const statusClass = d.status;
+        const statusLabel = statusLabels[d.status] || d.status;
+        const timeLabel = formatTime(d.created_at);
+        const actionLabel = d.status === 'finished' ? '查看回放' : '进入';
+        const winnerMap = { pro: '正方胜', con: '反方胜', draw: '平局' };
+        const resultText = d.winner ? ` · ${winnerMap[d.winner] || d.winner}` : '';
+
+        html += `
+            <div class="history-item">
+                <div class="history-item-meta">
+                    <div class="history-item-topic">${escapeHtml(d.topic)}</div>
+                    <div class="history-item-info">
+                        <span>${timeLabel}</span>
+                        <span>${d.total_rounds}轮</span>
+                        <span class="history-status ${statusClass}">${statusLabel}${resultText}</span>
+                    </div>
+                </div>
+                <div class="history-item-action">
+                    <button onclick="enterDebate('${d.id}', '${d.status}')">${actionLabel}</button>
+                </div>
+            </div>`;
+    });
+    container.innerHTML = html;
+}
+
+function formatTime(ts) {
+    if (!ts) return '';
+    try {
+        const d = new Date(ts + 'Z');
+        const now = new Date();
+        const diffMs = now - d;
+        const diffMins = Math.floor(diffMs / 60000);
+        if (diffMins < 1) return '刚刚';
+        if (diffMins < 60) return `${diffMins}分钟前`;
+        const diffHours = Math.floor(diffMins / 60);
+        if (diffHours < 24) return `${diffHours}小时前`;
+        const diffDays = Math.floor(diffHours / 24);
+        if (diffDays < 7) return `${diffDays}天前`;
+        return d.toLocaleDateString('zh-CN');
+    } catch (e) {
+        return ts;
+    }
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+async function enterDebate(debateId, status) {
+    currentDebateId = debateId;
+
+    // Show debate grid
+    document.getElementById('history-panel').style.display = 'none';
+    document.getElementById('config-panel').style.display = 'none';
+    document.getElementById('debate-grid').style.display = 'grid';
+    document.getElementById('control-bar').style.display = 'flex';
+    document.getElementById('verdict-section').style.display = 'none';
+    document.getElementById('new-debate-btn').style.display = 'inline-block';
+    document.getElementById('back-list-btn').style.display = 'inline-block';
+
+    clearAllCells();
+
+    if (status === 'finished') {
+        // Load full debate data for replay
+        try {
+            const resp = await fetch(`/api/debate/${debateId}`);
+            const debate = await resp.json();
+            document.getElementById('round-info').textContent = `共 ${debate.total_rounds} 轮`;
+            document.getElementById('phase-info').textContent = '已完成';
+            document.getElementById('pause-btn').disabled = true;
+            document.getElementById('resume-btn').disabled = true;
+            restoreSpeeches(debate.speeches || []);
+            if (debate.verdict && debate.winner) {
+                showVerdict(debate.verdict, debate.winner);
+            }
+            updateAllStatusBadges(debate.debater_status || {});
+        } catch (err) {
+            showError('加载辩论失败: ' + err.message);
+        }
+    } else {
+        // Connect SSE for live debate
+        document.getElementById('pause-btn').disabled = false;
+        document.getElementById('resume-btn').disabled = true;
+        connectSSE(debateId);
+    }
+}
+
+function updateAllStatusBadges(debaterStatus) {
+    const allKeys = ['pro_1', 'pro_2', 'pro_3', 'con_1', 'con_2', 'con_3'];
+    allKeys.forEach(key => {
+        const status = debaterStatus[key] || 'waiting';
+        setBadgeStatus(key, status);
+    });
+}
+
+function setBadgeStatus(debater, status) {
+    const badge = document.getElementById(`status-${debater}`);
+    if (!badge) return;
+    badge.classList.remove('active-badge', 'done-badge');
+    if (status === 'speaking') {
+        badge.textContent = '发言中';
+        badge.classList.add('active-badge');
+    } else if (status === 'done') {
+        badge.textContent = '已完成';
+        badge.classList.add('done-badge');
+    } else {
+        badge.textContent = '等待中';
+    }
+}
+
+function showHistoryPanel() {
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+    currentDebateId = null;
+    activeSpeaker = null;
+    loadDebateList();
 }
 
 function showError(message) {
