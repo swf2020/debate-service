@@ -76,6 +76,7 @@ async def run_tests() -> int:
             pro_skills={"debater_1": None, "debater_2": "karpathy-llm-wiki"},
             con_skills={"debater_1": "munger-perspective"},
             judge_skill="stop-slop",
+            user_id="test-user-1",
         )
         ok("inserted debate deb-1")
 
@@ -229,6 +230,7 @@ async def run_tests() -> int:
             pro_skills={},
             con_skills={"debater_1": "some-skill", "debater_2": None},
             judge_skill=None,
+            user_id="test-user-1",
         )
         debate = await db.get_debate("deb-json")
         assert debate is not None
@@ -239,6 +241,67 @@ async def run_tests() -> int:
         ok("JSON fields round-trip correctly (empty dict, null values)")
     except Exception as exc:
         fail("JSON round-trip", str(exc))
+        failures += 1
+
+    # ── user CRUD ────────────────────────────────────────────────────────
+    print("\n=== user CRUD ===")
+    try:
+        user_id = await db.create_user("alice", "$2b$12$hashedhash1234567890abcdef", is_admin=False)
+        assert user_id, f"expected non-empty user id, got {user_id!r}"
+        ok(f"created user alice with id={user_id}")
+
+        user = await db.get_user_by_username("alice")
+        assert user is not None, "get_user_by_username returned None"
+        assert user["username"] == "alice"
+        assert user["password_hash"] == "$2b$12$hashedhash1234567890abcdef"
+        assert user["is_admin"] == 0
+        ok("get_user_by_username returns correct fields")
+
+        user2 = await db.get_user_by_id(user_id)
+        assert user2 is not None
+        assert user2["username"] == "alice"
+        ok("get_user_by_id returns correct user")
+
+        missing = await db.get_user_by_username("nobody")
+        assert missing is None
+        ok("get_user_by_username returns None for missing user")
+
+        user_id2 = await db.create_user("bob", "$2b$12$hash2", is_admin=True)
+        users = await db.get_all_users()
+        assert len(users) >= 2
+        ok(f"get_all_users returns {len(users)} users with debate counts")
+    except Exception as exc:
+        fail("user CRUD", str(exc))
+        failures += 1
+
+    # ── debate user_id FK ────────────────────────────────────────────────
+    print("\n=== debate user_id FK ===")
+    try:
+        await db.create_debate(
+            id="deb-user-1",
+            topic="User scoped debate",
+            total_rounds=1,
+            pro_skills={},
+            con_skills={},
+            judge_skill=None,
+            user_id=user_id,
+        )
+        ok("created debate with user_id")
+
+        debates = await db.get_all_debates(user_id=user_id)
+        assert any(d["id"] == "deb-user-1" for d in debates), "debate not found for user"
+        ok("get_all_debates filters by user_id")
+
+        active = await db.get_active_debate(user_id=user_id)
+        assert active is not None
+        assert active["id"] == "deb-user-1"
+        ok("get_active_debate filters by user_id")
+
+        user_debates = await db.get_debates_by_user(user_id)
+        assert any(d["id"] == "deb-user-1" for d in user_debates)
+        ok("get_debates_by_user returns correct debates")
+    except Exception as exc:
+        fail("debate user_id FK", str(exc))
         failures += 1
 
     return failures

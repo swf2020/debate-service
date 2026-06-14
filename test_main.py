@@ -25,6 +25,7 @@ os.environ["DEBATE_DB_PATH"] = _tmp_db
 # reached (though all Flow/agent calls are mocked in these tests).
 os.environ["DEEPSEEK_API_KEY"] = "test-key-mock"
 
+from auth import create_access_token
 from debate_flow import _active_flows
 from sse_bridge import sse_bridge
 
@@ -50,6 +51,20 @@ def client():
     """FastAPI TestClient -- created once per module."""
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture(scope="module")
+def auth_headers():
+    """Create a JWT for a test user to use in authenticated requests."""
+    token = create_access_token("test-user-id", "testuser", is_admin=False)
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(scope="module")
+def admin_headers():
+    """Create a JWT for an admin test user."""
+    token = create_access_token("admin-id", "adminuser", is_admin=True)
+    return {"Authorization": f"Bearer {token}"}
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +110,7 @@ class TestStartDebate:
     @patch("main.DebateFlow")
     @patch("main.asyncio.create_task")
     def test_start_creates_debate_and_returns_id(
-        self, mock_create_task, mock_flow_cls, mock_create_db, client
+        self, mock_create_task, mock_flow_cls, mock_create_db, client, auth_headers
     ):
         """POST /api/debate/start persists a debate and returns debate_id."""
         mock_create_db.side_effect = AsyncMock()
@@ -105,7 +120,7 @@ class TestStartDebate:
         mock_create_task.return_value = None
 
         payload = {"topic": "人工智能是否对人类有益", "rounds": 2}
-        response = client.post("/api/debate/start", json=payload)
+        response = client.post("/api/debate/start", json=payload, headers=auth_headers)
 
         assert response.status_code == 200
         data = response.json()
@@ -118,7 +133,7 @@ class TestStartDebate:
     @patch("main.DebateFlow")
     @patch("main.asyncio.create_task")
     def test_start_with_skills(
-        self, mock_create_task, mock_flow_cls, mock_create_db, client
+        self, mock_create_task, mock_flow_cls, mock_create_db, client, auth_headers
     ):
         """Skills configs are accepted in the request body."""
         mock_create_db.side_effect = AsyncMock()
@@ -134,11 +149,17 @@ class TestStartDebate:
             "con_skills": {"debater_1": "skill-c"},
             "judge_skill": "judge-perspective",
         }
-        response = client.post("/api/debate/start", json=payload)
+        response = client.post("/api/debate/start", json=payload, headers=auth_headers)
 
         assert response.status_code == 200
         data = response.json()
         assert "debate_id" in data
+
+    def test_start_without_auth(self, client):
+        response = client.post("/api/debate/start", json={
+            "topic": "Test topic", "rounds": 1,
+        })
+        assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +170,7 @@ class TestStartDebate:
 class TestGetDebate:
     @patch("main.get_debate")
     @patch("main.get_speeches")
-    def test_get_detail(self, mock_speeches, mock_debate, client):
+    def test_get_detail(self, mock_speeches, mock_debate, client, auth_headers):
         """GET /api/debate/{id} returns debate with speeches."""
         mock_debate.side_effect = AsyncMock(return_value={
             "id": "deb-001",
@@ -161,12 +182,13 @@ class TestGetDebate:
             "judge_skill": None,
             "winner": None,
             "verdict": None,
+            "user_id": "test-user-id",
             "created_at": "2025-01-01 00:00:00",
             "finished_at": None,
         })
         mock_speeches.side_effect = AsyncMock(return_value=[])
 
-        response = client.get("/api/debate/deb-001")
+        response = client.get("/api/debate/deb-001", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == "deb-001"
@@ -174,11 +196,11 @@ class TestGetDebate:
         assert isinstance(data["speeches"], list)
 
     @patch("main.get_debate")
-    def test_get_detail_not_found(self, mock_debate, client):
+    def test_get_detail_not_found(self, mock_debate, client, auth_headers):
         """GET /api/debate/{id} returns 404 for non-existent debate."""
         mock_debate.side_effect = AsyncMock(return_value=None)
 
-        response = client.get("/api/debate/nonexistent")
+        response = client.get("/api/debate/nonexistent", headers=auth_headers)
         assert response.status_code == 404
 
 
@@ -188,14 +210,20 @@ class TestGetDebate:
 
 
 class TestPause:
-    def test_pause_not_found(self, client):
+    @patch("main.get_debate")
+    def test_pause_not_found(self, mock_debate, client, auth_headers):
         """POST /api/debate/{id}/pause returns 404 for non-existent debate."""
-        response = client.post("/api/debate/nonexistent/pause")
+        mock_debate.side_effect = AsyncMock(return_value=None)
+        response = client.post("/api/debate/nonexistent/pause", headers=auth_headers)
         assert response.status_code == 404
 
+    @patch("main.get_debate")
     @patch("main.update_debate_status")
-    def test_pause_existing(self, mock_update, client):
+    def test_pause_existing(self, mock_update, mock_debate, client, auth_headers):
         """Pause sets the paused flag and updates DB status."""
+        mock_debate.side_effect = AsyncMock(return_value={
+            "id": "deb-pause", "user_id": "test-user-id",
+        })
         mock_update.side_effect = AsyncMock()
 
         mock_flow = MagicMock()
@@ -203,7 +231,7 @@ class TestPause:
         mock_flow.state.paused = False
         _active_flows["deb-pause"] = mock_flow
 
-        response = client.post("/api/debate/deb-pause/pause")
+        response = client.post("/api/debate/deb-pause/pause", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() == {"status": "paused"}
         assert mock_flow.state.paused is True
@@ -216,14 +244,20 @@ class TestPause:
 
 
 class TestResume:
-    def test_resume_not_found(self, client):
+    @patch("main.get_debate")
+    def test_resume_not_found(self, mock_debate, client, auth_headers):
         """POST /api/debate/{id}/resume returns 404 for non-existent debate."""
-        response = client.post("/api/debate/nonexistent/resume")
+        mock_debate.side_effect = AsyncMock(return_value=None)
+        response = client.post("/api/debate/nonexistent/resume", headers=auth_headers)
         assert response.status_code == 404
 
+    @patch("main.get_debate")
     @patch("main.update_debate_status")
-    def test_resume_existing(self, mock_update, client):
+    def test_resume_existing(self, mock_update, mock_debate, client, auth_headers):
         """Resume clears the paused flag and updates DB status."""
+        mock_debate.side_effect = AsyncMock(return_value={
+            "id": "deb-resume", "user_id": "test-user-id",
+        })
         mock_update.side_effect = AsyncMock()
 
         mock_flow = MagicMock()
@@ -231,7 +265,7 @@ class TestResume:
         mock_flow.state.paused = True
         _active_flows["deb-resume"] = mock_flow
 
-        response = client.post("/api/debate/deb-resume/resume")
+        response = client.post("/api/debate/deb-resume/resume", headers=auth_headers)
         assert response.status_code == 200
         assert response.json() == {"status": "running"}
         assert mock_flow.state.paused is False
@@ -245,11 +279,11 @@ class TestResume:
 
 class TestStream:
     @patch("main.get_debate")
-    def test_stream_not_found(self, mock_debate, client):
+    def test_stream_not_found(self, mock_debate, client, auth_headers):
         """GET /api/debate/{id}/stream returns 404 for non-existent debate."""
         mock_debate.side_effect = AsyncMock(return_value=None)
 
-        response = client.get("/api/debate/nonexistent/stream")
+        response = client.get("/api/debate/nonexistent/stream", headers=auth_headers)
         assert response.status_code == 404
 
 
@@ -304,6 +338,39 @@ class TestValidation:
             headers={"Content-Type": "application/json"},
         )
         assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestAdminEndpoints:
+    def test_users_without_admin(self, client, auth_headers):
+        resp = client.get("/api/admin/users", headers=auth_headers)
+        assert resp.status_code == 403
+
+    def test_users_with_admin(self, client, admin_headers):
+        resp = client.get("/api/admin/users", headers=admin_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "users" in data
+
+    def test_users_without_auth(self, client):
+        resp = client.get("/api/admin/users")
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
+
+class TestHealth:
+    def test_health(self, client):
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

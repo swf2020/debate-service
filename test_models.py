@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import unittest
 
-from models import SSEStateSnapshot, DebateListItem, DebateState, SSEHistoryReplay
+from models import (
+    SSEStateSnapshot, DebateListItem, DebateState, SSEHistoryReplay,
+    RegisterRequest, LoginRequest, AuthResponse, UserInfo, AdminUserItem,
+)
 
 
 class TestSSEStateSnapshot(unittest.TestCase):
@@ -119,6 +122,31 @@ class TestSSEHistoryReplayNewFields(unittest.TestCase):
         )
         self.assertEqual(replay.current_debater, "pro_1")
         self.assertEqual(replay.debater_status["pro_1"], "speaking")
+
+
+class TestRegisterRequest(unittest.TestCase):
+    def test_valid_register(self):
+        r = RegisterRequest(username="alice", password="pass1234")
+        self.assertEqual(r.username, "alice")
+        self.assertEqual(r.password, "pass1234")
+
+
+class TestAuthResponse(unittest.TestCase):
+    def test_serialize(self):
+        u = UserInfo(id="1", username="alice", is_admin=False)
+        r = AuthResponse(token="jwt.token.here", user=u)
+        data = json.loads(r.model_dump_json())
+        self.assertEqual(data["token"], "jwt.token.here")
+        self.assertEqual(data["user"]["username"], "alice")
+
+
+class TestAdminUserItem(unittest.TestCase):
+    def test_with_debate_count(self):
+        item = AdminUserItem(
+            id="u1", username="alice", is_admin=False,
+            debate_count=5, created_at="2026-06-14"
+        )
+        self.assertEqual(item.debate_count, 5)
 
 
 if __name__ == "__main__":
