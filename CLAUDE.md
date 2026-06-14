@@ -8,6 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Run the service (starts on http://localhost:8080)
 python main.py
 
+# Restart the service (kill existing + start fresh)
+lsof -ti:8080 | xargs kill -9 2>/dev/null; sleep 1 && python /Users/sunwenfei/Desktop/workspace/debate-service/main.py
+
 # Run all tests
 pytest -v
 

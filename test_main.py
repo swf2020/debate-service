@@ -293,49 +293,53 @@ class TestStream:
 
 
 class TestValidation:
-    def test_invalid_rounds_zero(self, client):
+    def test_invalid_rounds_zero(self, client, auth_headers):
         """rounds=0 is rejected (minimum 1)."""
         response = client.post(
             "/api/debate/start",
             json={"topic": "test", "rounds": 0},
+            headers=auth_headers,
         )
         assert response.status_code == 400
 
-    def test_invalid_rounds_negative(self, client):
+    def test_invalid_rounds_negative(self, client, auth_headers):
         """rounds=-1 is rejected."""
         response = client.post(
             "/api/debate/start",
             json={"topic": "test", "rounds": -1},
+            headers=auth_headers,
         )
         assert response.status_code == 400
 
-    def test_invalid_rounds_too_large(self, client):
+    def test_invalid_rounds_too_large(self, client, auth_headers):
         """rounds=5 is rejected (max 3)."""
         response = client.post(
             "/api/debate/start",
             json={"topic": "test", "rounds": 5},
+            headers=auth_headers,
         )
         assert response.status_code == 400
 
-    def test_missing_topic(self, client):
+    def test_missing_topic(self, client, auth_headers):
         """Omitting topic returns 400."""
         response = client.post(
             "/api/debate/start",
             json={"rounds": 2},
+            headers=auth_headers,
         )
         assert response.status_code == 400
 
-    def test_empty_json(self, client):
+    def test_empty_json(self, client, auth_headers):
         """Empty body returns 400."""
-        response = client.post("/api/debate/start", json={})
+        response = client.post("/api/debate/start", json={}, headers=auth_headers)
         assert response.status_code == 400
 
-    def test_non_json_body(self, client):
+    def test_non_json_body(self, client, auth_headers):
         """Non-JSON body returns 400."""
         response = client.post(
             "/api/debate/start",
             data=b"not json",
-            headers={"Content-Type": "application/json"},
+            headers={**auth_headers, "Content-Type": "application/json"},
         )
         assert response.status_code == 400
 

@@ -6,6 +6,10 @@ Routes for debate lifecycle, SSE streaming, and static file serving.
 
 from __future__ import annotations
 
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+
 import asyncio
 import json
 import os

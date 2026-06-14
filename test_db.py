@@ -66,6 +66,17 @@ async def run_tests() -> int:
         fail("init_db", str(exc))
         failures += 1
 
+    # ── Create test user for FK references ────────────────────────────────
+    print("\n=== setup test user ===")
+    test_user_id = None
+    try:
+        test_user_id = await db.create_user("_test_user", "$2b$12$dummy", is_admin=False)
+        assert test_user_id, "expected non-empty user id"
+        ok(f"created test user with id={test_user_id}")
+    except Exception as exc:
+        fail("setup test user", str(exc))
+        failures += 1
+
     # ── create_debate ───────────────────────────────────────────────────
     print("\n=== create_debate ===")
     try:
@@ -76,7 +87,7 @@ async def run_tests() -> int:
             pro_skills={"debater_1": None, "debater_2": "karpathy-llm-wiki"},
             con_skills={"debater_1": "munger-perspective"},
             judge_skill="stop-slop",
-            user_id="test-user-1",
+            user_id=test_user_id,
         )
         ok("inserted debate deb-1")
 
@@ -230,7 +241,7 @@ async def run_tests() -> int:
             pro_skills={},
             con_skills={"debater_1": "some-skill", "debater_2": None},
             judge_skill=None,
-            user_id="test-user-1",
+            user_id=test_user_id,
         )
         debate = await db.get_debate("deb-json")
         assert debate is not None
