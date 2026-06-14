@@ -86,8 +86,12 @@ class TestMakeStepCallback(unittest.TestCase):
         mock_bridge.push.assert_not_called()
 
     @patch("agents.sse_bridge")
-    def test_agent_finish_pushes_speech_chunk(self, mock_bridge):
-        """AgentFinish with output pushes SSESpeechChunk via sse_bridge."""
+    def test_agent_finish_pushes_thinking_chunk(self, mock_bridge):
+        """AgentFinish with thought pushes SSEThinkingChunk via sse_bridge.
+
+        Speech content is streamed in real-time by _install_stream_hook
+        patching LLM._emit_stream_chunk_event, NOT from step_callback.
+        """
         cb = _make_step_callback(self.debate_id, self.debater_key)
         finish = AgentFinish(
             thought="Final thought",
@@ -100,10 +104,10 @@ class TestMakeStepCallback(unittest.TestCase):
         call_args = mock_bridge.push.call_args
         self.assertEqual(call_args[0][0], self.debate_id)
         chunk = call_args[0][1]
-        self.assertIsInstance(chunk, SSESpeechChunk)
+        self.assertIsInstance(chunk, SSEThinkingChunk)
         self.assertEqual(chunk.debate_id, self.debate_id)
         self.assertEqual(chunk.debater, self.debater_key)
-        self.assertEqual(chunk.content, "This is the final speech output.")
+        self.assertEqual(chunk.content, "Final thought")
 
     @patch("agents.sse_bridge")
     def test_agent_finish_empty_output_does_not_push(self, mock_bridge):
