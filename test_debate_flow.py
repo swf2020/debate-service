@@ -20,6 +20,7 @@ from models import (
     SSEError,
     SSEDebateEnd,
     SSEVerdictChunk,
+    SSEStateSnapshot,
 )
 
 
@@ -255,6 +256,28 @@ class TestRunAgentPhase(unittest.TestCase):
                 )
 
                 self.assertEqual(output, "test speech content.")
+
+                # Verify state_snapshot was pushed (speaking + done = 2)
+                snap_calls = [
+                    c for c in mock_bridge.push.call_args_list
+                    if isinstance(c[0][1], SSEStateSnapshot)
+                ]
+                self.assertEqual(len(snap_calls), 2,
+                                 f"Expected 2 SSEStateSnapshot pushes, got {len(snap_calls)}")
+
+                # First snapshot: speaking
+                snap1 = snap_calls[0][0][1]
+                self.assertEqual(snap1.current_debater, "pro_1")
+                self.assertEqual(snap1.debater_status["pro_1"], "speaking")
+
+                # Second snapshot: done
+                snap2 = snap_calls[1][0][1]
+                self.assertEqual(snap2.current_debater, "")
+                self.assertEqual(snap2.debater_status["pro_1"], "done")
+
+                # Verify state after execution
+                self.assertEqual(self.flow.state.debater_status["pro_1"], "done")
+                self.assertEqual(self.flow.state.current_debater, "")
 
                 # Verify phase_start was pushed
                 start_calls = [
