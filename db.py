@@ -32,7 +32,7 @@ async def get_db() -> aiosqlite.Connection:
 
 
 async def init_db() -> None:
-    """Create tables and index if they don't exist."""
+    """Create tables and index if they don't exist. Migrate existing DBs."""
     db = await get_db()
     try:
         await db.executescript("""
@@ -67,6 +67,20 @@ async def init_db() -> None:
                 ON speeches(debate_id);
         """)
         await db.commit()
+
+        # Migrate: add columns if missing (safe for fresh + existing DBs)
+        existing = await db.execute("PRAGMA table_info(debates)")
+        columns = {row[1] for row in await existing.fetchall()}
+
+        if "current_debater" not in columns:
+            await db.execute(
+                "ALTER TABLE debates ADD COLUMN current_debater TEXT DEFAULT ''"
+            )
+        if "debater_status" not in columns:
+            await db.execute(
+                "ALTER TABLE debates ADD COLUMN debater_status TEXT DEFAULT '{}'"
+            )
+        await db.commit()
     finally:
         await db.close()
 
@@ -90,19 +104,19 @@ async def create_debate(
     """INSERT a new debate row."""
     db = await get_db()
     try:
+        default_status = json.dumps({
+            "pro_1": "waiting", "pro_2": "waiting", "pro_3": "waiting",
+            "con_1": "waiting", "con_2": "waiting", "con_3": "waiting",
+            "judge": "waiting",
+        })
         await db.execute(
             """
-            INSERT INTO debates (id, topic, total_rounds, pro_skills, con_skills, judge_skill)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO debates (id, topic, total_rounds, pro_skills, con_skills,
+                                 judge_skill, current_debater, debater_status)
+            VALUES (?, ?, ?, ?, ?, ?, '', ?)
             """,
-            (
-                id,
-                topic,
-                total_rounds,
-                json.dumps(pro_skills),
-                json.dumps(con_skills),
-                judge_skill,
-            ),
+            (id, topic, total_rounds, json.dumps(pro_skills),
+             json.dumps(con_skills), judge_skill, default_status),
         )
         await db.commit()
     finally:
@@ -194,11 +208,25 @@ async def get_debate(debate_id: str) -> dict | None:
 def _row_to_debate(row: aiosqlite.Row) -> dict:
     """Convert a raw debates row to a dict, parsing JSON columns."""
     d = dict(row)
-    for col in ("pro_skills", "con_skills", "verdict"):
+    for col in ("pro_skills", "con_skills", "verdict", "debater_status"):
         raw = d.get(col)
         if raw is not None:
             d[col] = json.loads(raw)
     return d
+
+
+async def get_all_debates() -> list[dict]:
+    """SELECT all debates, ordered by created_at DESC."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, topic, status, total_rounds, winner, created_at, "
+            "finished_at FROM debates ORDER BY created_at DESC"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
 
 
 # ── Speeches CRUD ───────────────────────────────────────────────────────────
