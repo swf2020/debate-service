@@ -22,6 +22,7 @@ from debate_flow import DebateFlow, _active_flows
 from db import (
     create_debate,
     get_active_debate,
+    get_all_debates,
     get_debate,
     get_speeches,
     init_db,
@@ -89,6 +90,13 @@ async def get_skills():
 # ---------------------------------------------------------------------------
 # Active debate check (for page-refresh reconnection)
 # ---------------------------------------------------------------------------
+
+
+@app.get("/api/debates")
+async def list_debates():
+    """Return all debates ordered by created_at DESC."""
+    rows = await get_all_debates()
+    return {"debates": [dict(r) for r in rows]}
 
 
 @app.get("/api/debate/active")
@@ -190,11 +198,13 @@ async def stream_debate(debate_id: str):
                     total_rounds=state.total_rounds,
                     current_round=state.current_round,
                     current_phase=state.current_phase,
+                    current_debater=state.current_debater,
                     paused=state.paused,
                     status="paused" if state.paused else "running",
                     pro_skills=state.pro_skills,
                     con_skills=state.con_skills,
                     judge_skill=state.judge_skill,
+                    debater_status=state.debater_status,
                     speeches=[dict(s) for s in speeches],
                 )
                 yield f"data: {replay.model_dump_json()}\n\n"
@@ -208,11 +218,13 @@ async def stream_debate(debate_id: str):
                         total_rounds=debate.get("total_rounds", 1),
                         current_round=0,
                         current_phase="",
+                        current_debater="",
                         paused=False,
                         status=debate.get("status", "finished"),
                         pro_skills=debate.get("pro_skills", {}),
                         con_skills=debate.get("con_skills", {}),
                         judge_skill=debate.get("judge_skill"),
+                        debater_status=debate.get("debater_status", {}),
                         speeches=[dict(s) for s in speeches],
                     )
                     yield f"data: {replay.model_dump_json()}\n\n"
