@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>辩论服务 - Debate Service</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #1a1a2e;
+    color: #e2e2e2;
+    min-height: 100vh;
+    line-height: 1.6;
+  }
+  .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+  /* ── Header ── */
+  header {
+    text-align: center;
+    padding: 20px 0 10px;
+    border-bottom: 1px solid #2a2a4a;
+    margin-bottom: 24px;
+  }
+  header h1 { font-size: 1.6rem; color: #bb86fc; letter-spacing: 2px; }
+  header p { font-size: 0.85rem; color: #888; margin-top: 4px; }
+
+  /* ── Config Panel ── */
+  #config-panel {
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+    transition: opacity 0.3s;
+  }
+  #config-panel.hidden { display: none; }
+  .config-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .config-row:last-child { margin-bottom: 0; }
+  .config-group {
+    flex: 1;
+    min-width: 180px;
+  }
+  .config-group label {
+    display: block;
+    font-size: 0.85rem;
+    color: #aaa;
+    margin-bottom: 4px;
+    font-weight: 500;
+  }
+  .config-group input,
+  .config-group select {
+    width: 100%;
+    padding: 8px 12px;
+    background: #1a1a2e;
+    border: 1px solid #3a3a5a;
+    border-radius: 6px;
+    color: #e2e2e2;
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .config-group input:focus,
+  .config-group select:focus {
+    border-color: #bb86fc;
+  }
+  .config-group input::placeholder { color: #666; }
+  .skill-group-title {
+    font-size: 0.8rem;
+    color: #888;
+    margin-bottom: 8px;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+  .skill-section {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .skill-section .config-group { min-width: 140px; flex: 1; }
+  .pro-title { color: #4fc3f7; }
+  .con-title { color: #ef5350; }
+  .judge-title { color: #bb86fc; }
+
+  .config-actions {
+    margin-top: 20px;
+    text-align: center;
+  }
+  #start-btn {
+    padding: 12px 48px;
+    background: linear-gradient(135deg, #bb86fc, #9c6ade);
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 1.05rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.15s;
+    letter-spacing: 2px;
+  }
+  #start-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+  #start-btn:active { transform: translateY(0); }
+  #start-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  /* ── Control Bar ── */
+  #control-bar {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 12px 24px;
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  #control-bar.visible { display: flex; }
+  .control-info {
+    display: flex;
+    gap: 16px;
+    font-size: 0.9rem;
+  }
+  .control-info span { color: #aaa; }
+  .control-info .info-value { color: #e2e2e2; font-weight: 600; }
+  .control-buttons { display: flex; gap: 8px; }
+  .ctrl-btn {
+    padding: 6px 18px;
+    border: 1px solid #3a3a5a;
+    border-radius: 6px;
+    background: #1a1a2e;
+    color: #e2e2e2;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: border-color 0.2s;
+  }
+  .ctrl-btn:hover { border-color: #bb86fc; }
+  .ctrl-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── Debate Grid ── */
+  #debate-grid {
+    display: none;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  #debate-grid.visible { display: grid; }
+  .grid-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .debater-cell {
+    background: #16213e;
+    border: 2px solid #2a2a4a;
+    border-radius: 10px;
+    padding: 16px;
+    transition: border-color 0.4s ease, box-shadow 0.4s ease;
+    display: flex;
+    flex-direction: column;
+  }
+  .debater-cell.active {
+    box-shadow: 0 0 20px rgba(255,255,255,0.08);
+  }
+  .debater-cell.pro-cell.active { border-color: #4fc3f7; }
+  .debater-cell.con-cell.active { border-color: #ef5350; }
+  .debater-cell.judge-cell.active { border-color: #bb86fc; }
+
+  .cell-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #2a2a4a;
+  }
+  .cell-debater-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .pro-cell .cell-debater-name { color: #4fc3f7; }
+  .con-cell .cell-debater-name { color: #ef5350; }
+  .judge-cell .cell-debater-name { color: #bb86fc; }
+
+  .cell-role {
+    font-size: 0.75rem;
+    color: #888;
+    margin-top: 2px;
+  }
+  .status-badge {
+    font-size: 0.75rem;
+    padding: 2px 10px;
+    border-radius: 10px;
+    background: #2a2a4a;
+    color: #888;
+  }
+  .status-badge.active-badge {
+    background: #4fc3f7;
+    color: #1a1a2e;
+    font-weight: 600;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  .status-badge.done-badge {
+    background: #2e7d32;
+    color: #a5d6a7;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+
+  .cell-content { flex: 1; min-height: 60px; }
+  .cell-content details {
+    margin-bottom: 8px;
+  }
+  .cell-content details summary {
+    cursor: pointer;
+    color: #888;
+    font-size: 0.8rem;
+    padding: 2px 0;
+    user-select: none;
+  }
+  .cell-content details summary:hover { color: #aaa; }
+  .thinking-content {
+    color: #888;
+    font-size: 0.8rem;
+    padding: 8px 10px;
+    background: #1a1a2e;
+    border-radius: 6px;
+    margin-top: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.5;
+  }
+  .speech-content {
+    color: #e2e2e2;
+    font-size: 0.85rem;
+    padding: 8px 10px;
+    background: #1a1a2e;
+    border-radius: 6px;
+    min-height: 40px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+  }
+  .speech-content:empty::before {
+    content: "等待发言...";
+    color: #555;
+    font-style: italic;
+  }
+
+  /* ── Verdict Section ── */
+  #verdict-section {
+    display: none;
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  #verdict-section.visible { display: block; }
+  #verdict-section h2 {
+    text-align: center;
+    color: #bb86fc;
+    margin-bottom: 20px;
+    font-size: 1.3rem;
+    letter-spacing: 2px;
+  }
+  #verdict-winner {
+    text-align: center;
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 20px;
+    padding: 12px;
+    border-radius: 8px;
+  }
+  #verdict-winner.pro-wins { color: #4fc3f7; background: rgba(79,195,247,0.08); }
+  #verdict-winner.con-wins { color: #ef5350; background: rgba(239,83,80,0.08); }
+  #verdict-winner.draw { color: #ffd54f; background: rgba(255,213,79,0.08); }
+
+  #verdict-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+    font-size: 0.9rem;
+  }
+  #verdict-table th, #verdict-table td {
+    padding: 10px 14px;
+    text-align: center;
+    border: 1px solid #2a2a4a;
+  }
+  #verdict-table th {
+    background: #1a1a2e;
+    color: #aaa;
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  #verdict-table td { background: #16213e; }
+  #verdict-table .pro-score { color: #4fc3f7; }
+  #verdict-table .con-score { color: #ef5350; }
+  #verdict-table .total-row td { font-weight: 700; border-top: 2px solid #3a3a5a; }
+
+  #verdict-summary {
+    padding: 16px;
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    color: #e2e2e2;
+    font-size: 0.88rem;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  #verdict-summary:empty {
+    display: none;
+  }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center;
+    padding: 20px 0;
+    color: #555;
+    font-size: 0.78rem;
+    border-top: 1px solid #2a2a4a;
+    margin-top: 10px;
+  }
+
+  /* ── Error Toast ── */
+  #error-toast {
+    display: none;
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #c62828;
+    color: #fff;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    z-index: 1000;
+    max-width: 90vw;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  }
+  #error-toast.visible { display: block; }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .grid-row { grid-template-columns: 1fr; }
+    .config-row { flex-direction: column; }
+    .skill-section { flex-direction: column; }
+    .skill-section .config-group { min-width: 100%; }
+    .control-info { flex-direction: column; align-items: center; gap: 4px; }
+    #control-bar { flex-direction: column; }
+    .container { padding: 12px; }
+    #config-panel { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Header -->
+    <header>
+      <h1>AI 辩论服务</h1>
+      <p>基于 CrewAI 的多智能体辩论平台</p>
+    </header>
+
+    <!-- Config Panel -->
+    <div id="config-panel">
+      <div class="config-row">
+        <div class="config-group" style="flex:2; min-width:260px;">
+          <label for="topic-input">辩题</label>
+          <input type="text" id="topic-input" placeholder="输入辩论主题..." maxlength="200">
+        </div>
+        <div class="config-group" style="min-width:100px;">
+          <label for="rounds-select">轮次</label>
+          <select id="rounds-select">
+            <option value="1" selected>1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="config-row">
+        <div class="config-group" style="flex:1;">
+          <div class="skill-group-title pro-title">正方 Skill</div>
+          <div class="skill-section">
+            <div class="config-group">
+              <label for="pro-skills-1">一辩</label>
+              <select id="pro-skills-1"><option value="">-- 默认 --</option></select>
+            </div>
+            <div class="config-group">
+              <label for="pro-skills-2">二辩</label>
+              <select id="pro-skills-2"><option value="">-- 默认 --</option></select>
+            </div>
+            <div class="config-group">
+              <label for="pro-skills-3">三辩</label>
+              <select id="pro-skills-3"><option value="">-- 默认 --</option></select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-row">
+        <div class="config-group" style="flex:1;">
+          <div class="skill-group-title con-title">反方 Skill</div>
+          <div class="skill-section">
+            <div class="config-group">
+              <label for="con-skills-1">一辩</label>
+              <select id="con-skills-1"><option value="">-- 默认 --</option></select>
+            </div>
+            <div class="config-group">
+              <label for="con-skills-2">二辩</label>
+              <select id="con-skills-2"><option value="">-- 默认 --</option></select>
+            </div>
+            <div class="config-group">
+              <label for="con-skills-3">三辩</label>
+              <select id="con-skills-3"><option value="">-- 默认 --</option></select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-row">
+        <div class="config-group" style="min-width:200px; max-width:300px;">
+          <div class="skill-group-title judge-title">裁判 Skill</div>
+          <select id="judge-skill"><option value="">-- 默认 --</option></select>
+        </div>
+      </div>
+
+      <div class="config-actions">
+        <button id="start-btn">开始辩论</button>
+      </div>
+    </div>
+
+    <!-- Control Bar -->
+    <div id="control-bar">
+      <div class="control-info">
+        <span>轮次: <span class="info-value" id="round-info">-</span></span>
+        <span>阶段: <span class="info-value" id="phase-info">-</span></span>
+      </div>
+      <div class="control-buttons">
+        <button class="ctrl-btn" id="pause-btn" disabled>暂停</button>
+        <button class="ctrl-btn" id="resume-btn" disabled>继续</button>
+        <button class="ctrl-btn" id="new-debate-btn" style="display:none; border-color: #bb86fc; color: #bb86fc;">新辩论</button>
+      </div>
+    </div>
+
+    <!-- Debate Grid -->
+    <div id="debate-grid">
+      <div class="grid-row">
+        <div class="debater-cell pro-cell" data-debater="pro_1" id="cell-pro_1">
+          <div class="cell-header">
+            <div>
+              <div class="cell-debater-name">正方一辩</div>
+              <div class="cell-role">开篇立论</div>
+            </div>
+            <span class="status-badge" id="status-pro_1">等待</span>
+          </div>
+          <div class="cell-content">
+            <details id="details-pro_1">
+              <summary>思考过程</summary>
+              <div class="thinking-content" id="thinking-pro_1"></div>
+            </details>
+            <div class="speech-content" id="speech-pro_1"></div>
+          </div>
+        </div>
+        <div class="debater-cell con-cell" data-debater="con_1" id="cell-con_1">
+          <div class="cell-header">
+            <div>
+              <div class="cell-debater-name">反方一辩</div>
+              <div class="cell-role">开篇立论</div>
+            </div>
+            <span class="status-badge" id="status-con_1">等待</span>
+          </div>
+          <div class="cell-content">
+            <details id="details-con_1">
+              <summary>思考过程</summary>
+              <div class="thinking-content" id="thinking-con_1"></div>
+            </details>
+            <div class="speech-content" id="speech-con_1"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-row">
+        <div class="debater-cell pro-cell" data-debater="pro_2" id="cell-pro_2">
+          <div class="cell-header">
+            <div>
+              <div class="cell-debater-name">正方二辩</div>
+              <div class="cell-role">驳论 / 自由辩论</div>
+            </div>
+            <span class="status-badge" id="status-pro_2">等待</span>
+          </div>
+          <div class="cell-content">
+            <details id="details-pro_2">
+              <summary>思考过程</summary>
+              <div class="thinking-content" id="thinking-pro_2"></div>
+            </details>
+            <div class="speech-content" id="speech-pro_2"></div>
+          </div>
+        </div>
+        <div class="debater-cell con-cell" data-debater="con_2" id="cell-con_2">
+          <div class="cell-header">
+            <div>
+              <div class="cell-debater-name">反方二辩</div>
+              <div class="cell-role">驳论 / 自由辩论</div>
+            </div>
+            <span class="status-badge" id="status-con_2">等待</span>
+          </div>
+          <div class="cell-content">
+            <details id="details-con_2">
+              <summary>思考过程</summary>
+              <div class="thinking-content" id="thinking-con_2"></div>
+            </details>
+            <div class="speech-content" id="speech-con_2"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-row">
+        <div class="debater-cell pro-cell" data-debater="pro_3" id="cell-pro_3">
+          <div class="cell-header">
+            <div>
+              <div class="cell-debater-name">正方三辩</div>
+              <div class="cell-role">深入论证 / 总结陈词</div>
+            </div>
+            <span class="status-badge" id="status-pro_3">等待</span>
+          </div>
+          <div class="cell-content">
+            <details id="details-pro_3">
+              <summary>思考过程</summary>
+              <div class="thinking-content" id="thinking-pro_3"></div>
+            </details>
+            <div class="speech-content" id="speech-pro_3"></div>
+          </div>
+        </div>
+        <div class="debater-cell con-cell" data-debater="con_3" id="cell-con_3">
+          <div class="cell-header">
+            <div>
+              <div class="cell-debater-name">反方三辩</div>
+              <div class="cell-role">深入论证 / 总结陈词</div>
+            </div>
+            <span class="status-badge" id="status-con_3">等待</span>
+          </div>
+          <div class="cell-content">
+            <details id="details-con_3">
+              <summary>思考过程</summary>
+              <div class="thinking-content" id="thinking-con_3"></div>
+            </details>
+            <div class="speech-content" id="speech-con_3"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Verdict Section -->
+    <div id="verdict-section">
+      <h2>裁决结果</h2>
+      <div id="verdict-winner"></div>
+      <table id="verdict-table">
+        <thead>
+          <tr>
+            <th>评分维度</th>
+            <th>正方</th>
+            <th>反方</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>论点与论证</td><td class="pro-score" id="score-argument-pro">-</td><td class="con-score" id="score-argument-con">-</td></tr>
+          <tr><td>反驳与回应</td><td class="pro-score" id="score-rebuttal-pro">-</td><td class="con-score" id="score-rebuttal-con">-</td></tr>
+          <tr><td>语言与表达</td><td class="pro-score" id="score-expression-pro">-</td><td class="con-score" id="score-expression-con">-</td></tr>
+          <tr><td>团队协作</td><td class="pro-score" id="score-teamwork-pro">-</td><td class="con-score" id="score-teamwork-con">-</td></tr>
+          <tr class="total-row"><td>总分</td><td class="pro-score" id="score-total-pro">-</td><td class="con-score" id="score-total-con">-</td></tr>
+        </tbody>
+      </table>
+      <div id="verdict-summary"></div>
+    </div>
+
+    <!-- Error Toast -->
+    <div id="error-toast"></div>
+
+    <!-- Footer -->
+    <footer>
+      Debate Service v1.0.0 &mdash; Powered by CrewAI &amp; FastAPI
+    </footer>
+
+  </div>
+
+  <!-- app.js loads and handles SSE logic -->
+  <script src="/static/app.js"></script>
+</body>
+</html>
