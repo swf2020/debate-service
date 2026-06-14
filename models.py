@@ -202,3 +202,40 @@ class DebateListItem(BaseModel):
     winner: str | None = None
     created_at: str
     finished_at: str | None = None
+
+
+# ── Auth models ──────────────────────────────────────────────────────────────
+
+
+class RegisterRequest(BaseModel):
+    """Payload for user registration."""
+    username: str = Field(min_length=2, max_length=50)
+    password: str = Field(min_length=4, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    """Payload for user login."""
+    username: str
+    password: str
+
+
+class UserInfo(BaseModel):
+    """Public user info returned in auth responses."""
+    id: str
+    username: str
+    is_admin: bool
+
+
+class AuthResponse(BaseModel):
+    """Response for register/login endpoints."""
+    token: str
+    user: UserInfo
+
+
+class AdminUserItem(BaseModel):
+    """User row in admin panel list."""
+    id: str
+    username: str
+    is_admin: bool
+    debate_count: int
+    created_at: str
