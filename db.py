@@ -36,6 +36,14 @@ async def init_db() -> None:
     db = await get_db()
     try:
         await db.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            TEXT PRIMARY KEY,
+                username      TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                is_admin      INTEGER DEFAULT 0,
+                created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS debates (
                 id           TEXT PRIMARY KEY,
                 topic        TEXT NOT NULL,
@@ -46,8 +54,10 @@ async def init_db() -> None:
                 judge_skill  TEXT,
                 winner       TEXT,
                 verdict      TEXT,
+                user_id      TEXT,
                 created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-                finished_at  DATETIME
+                finished_at  DATETIME,
+                FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
             CREATE TABLE IF NOT EXISTS speeches (
@@ -80,6 +90,10 @@ async def init_db() -> None:
             await db.execute(
                 "ALTER TABLE debates ADD COLUMN debater_status TEXT DEFAULT '{}'"
             )
+        if "user_id" not in columns:
+            await db.execute(
+                "ALTER TABLE debates ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
         await db.commit()
     finally:
         await db.close()
@@ -100,6 +114,7 @@ async def create_debate(
     pro_skills: dict,
     con_skills: dict,
     judge_skill: str | None,
+    user_id: str,
 ) -> None:
     """INSERT a new debate row."""
     db = await get_db()
@@ -112,11 +127,11 @@ async def create_debate(
         await db.execute(
             """
             INSERT INTO debates (id, topic, total_rounds, pro_skills, con_skills,
-                                 judge_skill, current_debater, debater_status)
-            VALUES (?, ?, ?, ?, ?, ?, '', ?)
+                                 judge_skill, user_id, current_debater, debater_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, '', ?)
             """,
             (id, topic, total_rounds, json.dumps(pro_skills),
-             json.dumps(con_skills), judge_skill, default_status),
+             json.dumps(con_skills), judge_skill, user_id, default_status),
         )
         await db.commit()
     finally:
@@ -166,17 +181,25 @@ async def set_verdict(id: str, winner: str, verdict: dict) -> None:
         await db.close()
 
 
-async def get_active_debate() -> dict | None:
+async def get_active_debate(user_id: str | None = None) -> dict | None:
     """Return the most recent debate with status != 'finished'.
 
+    If *user_id* is provided, filters to that user's debates only.
     Returns ``None`` when no active debate exists.
     """
     db = await get_db()
     try:
-        cursor = await db.execute(
-            "SELECT * FROM debates WHERE status != 'finished' "
-            "ORDER BY created_at DESC LIMIT 1"
-        )
+        if user_id:
+            cursor = await db.execute(
+                "SELECT * FROM debates WHERE status != 'finished' AND user_id = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (user_id,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM debates WHERE status != 'finished' "
+                "ORDER BY created_at DESC LIMIT 1"
+            )
         row = await cursor.fetchone()
         if row is None:
             return None
@@ -215,13 +238,106 @@ def _row_to_debate(row: aiosqlite.Row) -> dict:
     return d
 
 
-async def get_all_debates() -> list[dict]:
-    """SELECT all debates, ordered by created_at DESC."""
+async def get_all_debates(user_id: str | None = None) -> list[dict]:
+    """SELECT all debates, ordered by created_at DESC.
+
+    If *user_id* is provided, filters to that user's debates only.
+    """
+    db = await get_db()
+    try:
+        if user_id:
+            cursor = await db.execute(
+                "SELECT id, topic, status, total_rounds, winner, created_at, "
+                "finished_at FROM debates WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT id, topic, status, total_rounds, winner, created_at, "
+                "finished_at FROM debates ORDER BY created_at DESC"
+            )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+# ── Users CRUD ──────────────────────────────────────────────────────────────
+
+
+async def create_user(username: str, password_hash: str, is_admin: bool = False) -> str:
+    """INSERT a new user. Returns the user id."""
+    import uuid as _uuid
+    user_id = str(_uuid.uuid4())
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)",
+            (user_id, username, password_hash, int(is_admin)),
+        )
+        await db.commit()
+        return user_id
+    finally:
+        await db.close()
+
+
+async def get_user_by_username(username: str) -> dict | None:
+    """SELECT a user by username. Returns None if not found."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM users WHERE username = ?",
+            (username,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+    finally:
+        await db.close()
+
+
+async def get_user_by_id(user_id: str) -> dict | None:
+    """SELECT a user by id. Returns None if not found."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM users WHERE id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+    finally:
+        await db.close()
+
+
+async def get_all_users() -> list[dict]:
+    """SELECT all users with debate counts. Admin only."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("""
+            SELECT u.*, COUNT(d.id) as debate_count
+            FROM users u
+            LEFT JOIN debates d ON d.user_id = u.id
+            GROUP BY u.id
+            ORDER BY u.created_at DESC
+        """)
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def get_debates_by_user(user_id: str) -> list[dict]:
+    """SELECT all debates for a given user, ordered by created_at DESC."""
     db = await get_db()
     try:
         cursor = await db.execute(
             "SELECT id, topic, status, total_rounds, winner, created_at, "
-            "finished_at FROM debates ORDER BY created_at DESC"
+            "finished_at FROM debates WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
