@@ -12,29 +12,39 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from auth import create_access_token, get_admin_user, get_current_user, hash_password, verify_password
 from debate_flow import DebateFlow, _active_flows
 from db import (
     create_debate,
+    create_user,
     get_active_debate,
     get_all_debates,
+    get_all_users,
     get_debate,
+    get_debates_by_user,
     get_speeches,
+    get_user_by_username,
     init_db,
     update_debate_status,
 )
 from models import (
+    AdminUserItem,
+    AuthResponse,
+    LoginRequest,
+    RegisterRequest,
     SSEError,
     SSEHistoryReplay,
     SSEPaused,
     SSEResumed,
     StartDebateRequest,
     StartDebateResponse,
+    UserInfo,
 )
 from skill_loader import list_available_skills
 from sse_bridge import sse_bridge
@@ -88,25 +98,90 @@ async def get_skills():
 
 
 # ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/health")
+async def health():
+    """Health check endpoint (public)."""
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/auth/register", response_model=AuthResponse)
+async def register(req: RegisterRequest):
+    """Register a new user. Returns JWT token."""
+    existing = await get_user_by_username(req.username)
+    if existing:
+        raise HTTPException(status_code=409, detail="Username already exists")
+
+    is_admin = req.username in os.environ.get("ADMIN_USERS", "").split(",")
+    hashed = hash_password(req.password)
+    user_id = await create_user(req.username, hashed, is_admin)
+
+    token = create_access_token(user_id, req.username, is_admin)
+    return AuthResponse(
+        token=token,
+        user=UserInfo(id=user_id, username=req.username, is_admin=is_admin),
+    )
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login(req: LoginRequest):
+    """Authenticate user and return JWT token."""
+    user = await get_user_by_username(req.username)
+    if not user or not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = create_access_token(user["id"], user["username"], bool(user["is_admin"]))
+    return AuthResponse(
+        token=token,
+        user=UserInfo(
+            id=user["id"],
+            username=user["username"],
+            is_admin=bool(user["is_admin"]),
+        ),
+    )
+
+
+@app.get("/api/auth/me", response_model=AuthResponse)
+async def me(current_user: dict = Depends(get_current_user)):
+    """Return current authenticated user info."""
+    return AuthResponse(
+        token="",
+        user=UserInfo(
+            id=current_user["user_id"],
+            username=current_user["username"],
+            is_admin=current_user["is_admin"],
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Active debate check (for page-refresh reconnection)
 # ---------------------------------------------------------------------------
 
 
 @app.get("/api/debates")
-async def list_debates():
-    """Return all debates ordered by created_at DESC."""
-    rows = await get_all_debates()
+async def list_debates(current_user: dict = Depends(get_current_user)):
+    """Return all debates for the current user, ordered by created_at DESC."""
+    rows = await get_all_debates(user_id=current_user["user_id"])
     return {"debates": [dict(r) for r in rows]}
 
 
 @app.get("/api/debate/active")
-async def get_active():
-    """Return the most recent unfinished debate, if any.
+async def get_active(current_user: dict = Depends(get_current_user)):
+    """Return the most recent unfinished debate for the current user.
 
     Used by the frontend on page load to detect whether a debate is still
     in progress and should be reconnected to.
     """
-    debate = await get_active_debate()
+    debate = await get_active_debate(user_id=current_user["user_id"])
     if not debate:
         return {"active": False, "debate": None}
 
@@ -121,7 +196,7 @@ async def get_active():
 
 
 @app.post("/api/debate/start")
-async def start_debate(req: StartDebateRequest):
+async def start_debate(req: StartDebateRequest, current_user: dict = Depends(get_current_user)):
     """Create a new debate and launch the Flow in background."""
     debate_id = str(uuid.uuid4())
 
@@ -133,6 +208,7 @@ async def start_debate(req: StartDebateRequest):
         pro_skills=req.pro_skills.model_dump(),
         con_skills=req.con_skills.model_dump(),
         judge_skill=req.judge_skill,
+        user_id=current_user["user_id"],
     )
 
     # Create Flow
@@ -172,17 +248,33 @@ async def _run_debate(debate_id: str, flow: DebateFlow):
 
 
 # ---------------------------------------------------------------------------
+# Ownership helper
+# ---------------------------------------------------------------------------
+
+
+async def _verify_ownership_or_admin(debate_id: str, current_user: dict) -> dict:
+    """Verify the current user owns the debate or is admin. Returns the debate dict."""
+    debate = await get_debate(debate_id)
+    if not debate:
+        raise HTTPException(status_code=404, detail="Debate not found")
+
+    is_admin = current_user.get("is_admin", False)
+    is_owner = debate.get("user_id") == current_user["user_id"]
+    if not is_admin and not is_owner:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return debate
+
+
+# ---------------------------------------------------------------------------
 # SSE streaming
 # ---------------------------------------------------------------------------
 
 
 @app.get("/api/debate/{debate_id}/stream")
-async def stream_debate(debate_id: str):
+async def stream_debate(debate_id: str, current_user: dict = Depends(get_current_user)):
     """SSE endpoint: stream debate events to the client."""
-    # Verify debate exists
-    debate = await get_debate(debate_id)
-    if not debate:
-        raise HTTPException(status_code=404, detail="Debate not found")
+    debate = await _verify_ownership_or_admin(debate_id, current_user)
 
     async def event_generator():
         queue = sse_bridge.subscribe(debate_id)
@@ -271,8 +363,9 @@ async def stream_debate(debate_id: str):
 
 
 @app.post("/api/debate/{debate_id}/pause")
-async def pause_debate(debate_id: str):
+async def pause_debate(debate_id: str, current_user: dict = Depends(get_current_user)):
     """Pause a running debate."""
+    await _verify_ownership_or_admin(debate_id, current_user)
     flow = _active_flows.get(debate_id)
     if not flow:
         raise HTTPException(status_code=404, detail="Debate not found or already finished")
@@ -286,8 +379,9 @@ async def pause_debate(debate_id: str):
 
 
 @app.post("/api/debate/{debate_id}/resume")
-async def resume_debate(debate_id: str):
+async def resume_debate(debate_id: str, current_user: dict = Depends(get_current_user)):
     """Resume a paused debate."""
+    await _verify_ownership_or_admin(debate_id, current_user)
     flow = _active_flows.get(debate_id)
     if not flow:
         raise HTTPException(status_code=404, detail="Debate not found or already finished")
@@ -306,19 +400,65 @@ async def resume_debate(debate_id: str):
 
 
 @app.get("/api/debate/{debate_id}")
-async def get_debate_detail(debate_id: str):
+async def get_debate_detail(debate_id: str, current_user: dict = Depends(get_current_user)):
     """Get debate detail with all speeches for history replay."""
-    debate = await get_debate(debate_id)
-    if not debate:
-        raise HTTPException(status_code=404, detail="Debate not found")
+    debate = await _verify_ownership_or_admin(debate_id, current_user)
 
     speeches = await get_speeches(debate_id)
-
-    # Convert Row objects to dicts if needed
     debate_dict = dict(debate)
     debate_dict["speeches"] = [dict(s) for s in speeches]
-
     return debate_dict
+
+
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/admin/users")
+async def admin_list_users(admin: dict = Depends(get_admin_user)):
+    """List all users with debate counts. Admin only."""
+    users = await get_all_users()
+    return {
+        "users": [
+            AdminUserItem(
+                id=u["id"],
+                username=u["username"],
+                is_admin=bool(u["is_admin"]),
+                debate_count=u.get("debate_count", 0),
+                created_at=str(u.get("created_at", "")),
+            ) for u in users
+        ]
+    }
+
+
+@app.get("/api/admin/users/{user_id}/debates")
+async def admin_user_debates(user_id: str, admin: dict = Depends(get_admin_user)):
+    """List all debates for a specific user. Admin only."""
+    from db import get_user_by_id as _get_user
+    user = await _get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    debates = await get_debates_by_user(user_id)
+    return {"user": user["username"], "debates": [dict(d) for d in debates]}
+
+
+@app.get("/api/admin/debates")
+async def admin_all_debates(admin: dict = Depends(get_admin_user)):
+    """List all debates across all users. Admin only."""
+    rows = await get_all_debates()
+    return {"debates": [dict(r) for r in rows]}
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page():
+    """Serve the admin panel page."""
+    admin_path = os.path.join(static_dir, "admin.html")
+    if os.path.exists(admin_path):
+        with open(admin_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    return HTMLResponse(content="<h1>Admin Panel</h1><p>admin.html not found</p>")
 
 
 # ---------------------------------------------------------------------------
