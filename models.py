@@ -27,6 +27,7 @@ class DebateState(FlowState):
     total_rounds: int = 1
     current_round: int = 1
     current_phase: str = ""
+    current_debater: str = ""
 
     pro_skills: dict = Field(
         default_factory=lambda: {"debater_1": "munger-perspective",
@@ -42,6 +43,11 @@ class DebateState(FlowState):
 
     debate_history: list[dict] = Field(default_factory=list)
     paused: bool = False
+    debater_status: dict[str, str] = Field(default_factory=lambda: {
+        "pro_1": "waiting", "pro_2": "waiting", "pro_3": "waiting",
+        "con_1": "waiting", "con_2": "waiting", "con_3": "waiting",
+        "judge": "waiting",
+    })
     verdict: dict | None = None
     winner: str | None = None
     id: str = ""
@@ -159,15 +165,40 @@ class SSEHistoryReplay(BaseModel):
     total_rounds: int
     current_round: int
     current_phase: str
+    current_debater: str = ""
     paused: bool
     status: str
     pro_skills: dict = Field(default_factory=dict)
     con_skills: dict = Field(default_factory=dict)
     judge_skill: str | None = None
+    debater_status: dict[str, str] = Field(default_factory=dict)
     speeches: list[dict] = Field(default_factory=list)
+
+
+class SSEStateSnapshot(BaseModel):
+    """Pushed on every debater status change (speaking/done/waiting)."""
+    type: Literal["state_snapshot"] = "state_snapshot"
+    debate_id: str
+    current_round: int
+    total_rounds: int
+    current_phase: str
+    current_debater: str
+    debater_status: dict[str, str]
+    paused: bool
 
 
 class SSEError(BaseModel):
     type: Literal["error"] = "error"
     debate_id: str
     message: str
+
+
+class DebateListItem(BaseModel):
+    """Single debate row in the history list response."""
+    id: str
+    topic: str
+    status: str
+    total_rounds: int
+    winner: str | None = None
+    created_at: str
+    finished_at: str | None = None
