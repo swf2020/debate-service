@@ -1,3 +1,110 @@
+// ---- Auth State ----
+let currentUser = null;
+
+function getToken() {
+    return localStorage.getItem('debate_token');
+}
+
+function setToken(token) {
+    localStorage.setItem('debate_token', token);
+}
+
+function clearToken() {
+    localStorage.removeItem('debate_token');
+}
+
+// ---- Auth UI ----
+
+function showAuthPanel() {
+    document.getElementById('auth-panel').classList.remove('hidden');
+    document.getElementById('user-bar').classList.add('hidden');
+    document.getElementById('main-content').classList.add('hidden');
+}
+
+function showMainUI(user) {
+    currentUser = user;
+    document.getElementById('auth-panel').classList.add('hidden');
+    document.getElementById('user-bar').classList.remove('hidden');
+    document.getElementById('main-content').classList.remove('hidden');
+    document.getElementById('current-username').textContent = user.username;
+
+    if (user.is_admin) {
+        document.getElementById('admin-link').classList.remove('hidden');
+    }
+
+    loadSkills();
+    loadDebateList();
+}
+
+// ---- Auth API ----
+
+async function handleLogin(e) {
+    e.preventDefault();
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    const errEl = document.getElementById('login-error');
+    errEl.textContent = '';
+
+    try {
+        const resp = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            errEl.textContent = data.detail || 'Login failed';
+            return;
+        }
+        setToken(data.token);
+        showMainUI(data.user);
+    } catch (err) {
+        errEl.textContent = 'Network error: ' + err.message;
+    }
+}
+
+async function handleRegister(e) {
+    e.preventDefault();
+    const username = document.getElementById('register-username').value.trim();
+    const password = document.getElementById('register-password').value;
+    const errEl = document.getElementById('register-error');
+    const succEl = document.getElementById('register-success');
+    errEl.textContent = '';
+    succEl.textContent = '';
+
+    try {
+        const resp = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            errEl.textContent = data.detail || 'Registration failed';
+            return;
+        }
+        succEl.textContent = '注册成功！正在登录...';
+        setToken(data.token);
+        setTimeout(() => showMainUI(data.user), 500);
+    } catch (err) {
+        errEl.textContent = 'Network error: ' + err.message;
+    }
+}
+
+function logout() {
+    clearToken();
+    currentUser = null;
+    if (eventSource) { eventSource.close(); eventSource = null; }
+    showAuthPanel();
+}
+
+// ---- Auth header helper ----
+
+function authHeaders() {
+    const token = getToken();
+    return token ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+}
+
 // ---- State ----
 let currentDebateId = null;
 let eventSource = null;
@@ -55,15 +162,50 @@ const PHASE_NAMES = {
 
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
-    loadSkills();
+    // Auth tab switching
+    document.querySelectorAll('.auth-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const isLogin = tab.dataset.tab === 'login';
+            document.getElementById('login-form').classList.toggle('hidden', !isLogin);
+            document.getElementById('register-form').classList.toggle('hidden', isLogin);
+        });
+    });
+
+    // Debate controls
     document.getElementById('start-btn').addEventListener('click', startDebate);
     document.getElementById('pause-btn').addEventListener('click', pauseDebate);
     document.getElementById('resume-btn').addEventListener('click', resumeDebate);
     document.getElementById('new-debate-btn').addEventListener('click', resetToNewDebate);
     document.getElementById('back-list-btn').addEventListener('click', showHistoryPanel);
 
-    loadDebateList();
+    // Check if already logged in
+    checkAuth();
 });
+
+async function checkAuth() {
+    const token = getToken();
+    if (!token) {
+        showAuthPanel();
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/auth/me', {
+            headers: { 'Authorization': 'Bearer ' + token }
+        });
+        if (!resp.ok) {
+            clearToken();
+            showAuthPanel();
+            return;
+        }
+        const data = await resp.json();
+        showMainUI(data.user);
+    } catch (err) {
+        showAuthPanel();
+    }
+}
 
 // Page load now handled by loadDebateList() — history list is default view.
 async function checkActiveDebate() {
@@ -163,7 +305,7 @@ function resetToNewDebate() {
 // ── Skills ──
 async function loadSkills() {
     try {
-        const resp = await fetch('/api/skills');
+        const resp = await fetch('/api/skills', { headers: authHeaders() });
         const data = await resp.json();
         const skills = data.skills || [];
 
@@ -214,7 +356,7 @@ async function startDebate() {
     try {
         const resp = await fetch('/api/debate/start', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders(),
             body: JSON.stringify({
                 topic,
                 rounds,
@@ -259,7 +401,7 @@ function connectSSE(debateId) {
         eventSource.close();
     }
 
-    eventSource = new EventSource(`/api/debate/${debateId}/stream`);
+    eventSource = new EventSource('/api/debate/' + debateId + '/stream?token=' + encodeURIComponent(getToken()));
 
     eventSource.onmessage = (event) => {
         try {
@@ -459,8 +601,8 @@ function clearAllCells() {
 async function loadDebateList() {
     try {
         const [debatesResp, activeResp] = await Promise.all([
-            fetch('/api/debates'),
-            fetch('/api/debate/active'),
+            fetch('/api/debates', { headers: authHeaders() }),
+            fetch('/api/debate/active', { headers: authHeaders() }),
         ]);
         const debatesData = await debatesResp.json();
         const debates = debatesData.debates || [];
@@ -565,7 +707,7 @@ async function enterDebate(debateId, status) {
     if (status === 'finished') {
         // Load full debate data for replay
         try {
-            const resp = await fetch(`/api/debate/${debateId}`);
+            const resp = await fetch(`/api/debate/${debateId}`, { headers: authHeaders() });
             const debate = await resp.json();
             document.getElementById('round-info').textContent = `共 ${debate.total_rounds} 轮`;
             document.getElementById('phase-info').textContent = '已完成';
@@ -632,7 +774,7 @@ function showError(message) {
 async function pauseDebate() {
     if (!currentDebateId) return;
     try {
-        await fetch(`/api/debate/${currentDebateId}/pause`, { method: 'POST' });
+        await fetch(`/api/debate/${currentDebateId}/pause`, { method: 'POST', headers: authHeaders() });
     } catch (err) {
         showError('暂停失败: ' + err.message);
     }
@@ -641,7 +783,7 @@ async function pauseDebate() {
 async function resumeDebate() {
     if (!currentDebateId) return;
     try {
-        await fetch(`/api/debate/${currentDebateId}/resume`, { method: 'POST' });
+        await fetch(`/api/debate/${currentDebateId}/resume`, { method: 'POST', headers: authHeaders() });
     } catch (err) {
         showError('恢复失败: ' + err.message);
     }
