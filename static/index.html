@@ -383,6 +383,99 @@
     margin-top: 10px;
   }
 
+  /* ── Cross-Examination Panel ── */
+  #cross-examine-panel {
+    display: none;
+    background: #1a1a2e;
+    border: 2px solid #e5a100;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  #cross-examine-panel.visible { display: block; }
+  .cross-header {
+    text-align: center;
+    color: #ffd54f;
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+    letter-spacing: 2px;
+  }
+  .cross-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .cross-examiner-section {
+    border-right: 1px solid #3a3a5a;
+    padding-right: 16px;
+  }
+  .cross-responder-section {
+    padding-left: 16px;
+  }
+  .cross-section-title {
+    font-size: 0.85rem;
+    color: #aaa;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .cross-round-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 10px;
+    background: #e5a100;
+    color: #1a1a2e;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 8px;
+  }
+  .cross-speech {
+    color: #e2e2e2;
+    font-size: 0.85rem;
+    padding: 10px;
+    background: #16213e;
+    border-radius: 6px;
+    min-height: 48px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+    margin-bottom: 8px;
+  }
+  .cross-speech:empty::before {
+    content: "\7b49\5f85\4e2d...";
+    color: #555;
+    font-style: italic;
+  }
+  .cross-q-entry {
+    margin-bottom: 16px;
+    border-bottom: 1px dashed #2a2a4a;
+    padding-bottom: 12px;
+  }
+  .cross-q-entry:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  /* ── Phase Progress Bar ── */
+  #phase-progress {
+    display: none;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: center;
+  }
+  #phase-progress.visible { display: flex; }
+  .phase-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #2a2a4a;
+    transition: background 0.3s;
+  }
+  .phase-dot.done { background: #2e7d32; }
+  .phase-dot.active { background: #bb86fc; box-shadow: 0 0 8px #bb86fc; }
+
   /* ── Error Toast ── */
   #error-toast {
     display: none;
@@ -598,6 +691,13 @@
             <option value="3">3</option>
           </select>
         </div>
+        <div class="config-group" style="min-width:120px;">
+          <label for="format-select">赛制</label>
+          <select id="format-select">
+            <option value="cdwc" selected>新国辩 CDWC</option>
+            <option value="standard">标准 3v3</option>
+          </select>
+        </div>
       </div>
 
       <div class="config-row">
@@ -615,6 +715,10 @@
             <div class="config-group">
               <label for="pro-skills-3">三辩</label>
               <select id="pro-skills-3"><option value="">-- 默认 --</option></select>
+            </div>
+            <div class="config-group">
+              <label for="pro-skills-4">四辩</label>
+              <select id="pro-skills-4"><option value="">-- 默认 --</option></select>
             </div>
           </div>
         </div>
@@ -635,6 +739,10 @@
             <div class="config-group">
               <label for="con-skills-3">三辩</label>
               <select id="con-skills-3"><option value="">-- 默认 --</option></select>
+            </div>
+            <div class="config-group">
+              <label for="con-skills-4">四辩</label>
+              <select id="con-skills-4"><option value="">-- 默认 --</option></select>
             </div>
           </div>
         </div>
@@ -663,7 +771,7 @@
     <!-- Control Bar -->
     <div id="control-bar">
       <div class="control-info">
-        <span>轮次: <span class="info-value" id="round-info">-</span></span>
+        <span>赛制: <span class="info-value" id="format-info">-</span></span>
         <span>阶段: <span class="info-value" id="phase-info">-</span></span>
       </div>
       <div class="control-buttons">
@@ -673,6 +781,9 @@
         <button class="ctrl-btn" id="new-debate-btn" style="display:none; border-color: #bb86fc; color: #bb86fc;">新辩论</button>
       </div>
     </div>
+
+    <!-- Phase Progress -->
+    <div id="phase-progress"></div>
 
     <!-- Debate Grid -->
     <div id="debate-grid">
@@ -780,6 +891,58 @@
           </div>
         </div>
       </div>
+
+      <div class="grid-row">
+        <div class="debater-cell pro-cell" data-debater="pro_4" id="cell-pro_4">
+          <div class="cell-header">
+            <div>
+              <div class="cell-debater-name">正方四辩</div>
+              <div class="cell-role">总结陈词</div>
+            </div>
+            <span class="status-badge" id="status-pro_4">等待</span>
+          </div>
+          <div class="cell-content">
+            <details id="details-pro_4">
+              <summary>思考过程</summary>
+              <div class="thinking-content" id="thinking-pro_4"></div>
+            </details>
+            <div class="speech-content" id="speech-pro_4"></div>
+          </div>
+        </div>
+        <div class="debater-cell con-cell" data-debater="con_4" id="cell-con_4">
+          <div class="cell-header">
+            <div>
+              <div class="cell-debater-name">反方四辩</div>
+              <div class="cell-role">总结陈词</div>
+            </div>
+            <span class="status-badge" id="status-con_4">等待</span>
+          </div>
+          <div class="cell-content">
+            <details id="details-con_4">
+              <summary>思考过程</summary>
+              <div class="thinking-content" id="thinking-con_4"></div>
+            </details>
+            <div class="speech-content" id="speech-con_4"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cross-Examination Panel -->
+    <div id="cross-examine-panel">
+      <div class="cross-header">
+        质询阶段 <span id="cross-round-badge" class="cross-round-badge"></span>
+      </div>
+      <div class="cross-body">
+        <div class="cross-examiner-section">
+          <div class="cross-section-title" id="cross-examiner-label">提问方</div>
+          <div id="cross-examiner-speeches"></div>
+        </div>
+        <div class="cross-responder-section">
+          <div class="cross-section-title" id="cross-responder-label">回答方</div>
+          <div id="cross-responder-speeches"></div>
+        </div>
+      </div>
     </div>
 
     <!-- Verdict Section -->
@@ -795,10 +958,11 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td>论点与论证</td><td class="pro-score" id="score-argument-pro">-</td><td class="con-score" id="score-argument-con">-</td></tr>
-          <tr><td>反驳与回应</td><td class="pro-score" id="score-rebuttal-pro">-</td><td class="con-score" id="score-rebuttal-con">-</td></tr>
-          <tr><td>语言与表达</td><td class="pro-score" id="score-expression-pro">-</td><td class="con-score" id="score-expression-con">-</td></tr>
-          <tr><td>团队协作</td><td class="pro-score" id="score-teamwork-pro">-</td><td class="con-score" id="score-teamwork-con">-</td></tr>
+          <tr><td>论证严谨度</td><td class="pro-score" id="score-argument-pro">-</td><td class="con-score" id="score-argument-con">-</td></tr>
+          <tr><td>数据与事实支撑</td><td class="pro-score" id="score-evidence-pro">-</td><td class="con-score" id="score-evidence-con">-</td></tr>
+          <tr><td>反驳有效性</td><td class="pro-score" id="score-rebuttal-pro">-</td><td class="con-score" id="score-rebuttal-con">-</td></tr>
+          <tr><td>质询有效性</td><td class="pro-score" id="score-cross-pro">-</td><td class="con-score" id="score-cross-con">-</td></tr>
+          <tr><td>表达清晰度</td><td class="pro-score" id="score-expression-pro">-</td><td class="con-score" id="score-expression-con">-</td></tr>
           <tr class="total-row"><td>总分</td><td class="pro-score" id="score-total-pro">-</td><td class="con-score" id="score-total-con">-</td></tr>
         </tbody>
       </table>

@@ -24,28 +24,36 @@ class DebateState(FlowState):
     """
 
     topic: str = ""
+    format: str = "cdwc"
     total_rounds: int = 1
     current_round: int = 1
     current_phase: str = ""
     current_debater: str = ""
 
+    # Cross-examination tracking
+    cross_examine_round: int = 0
+    cross_examine_examiner: str = ""
+    cross_examine_target: str = ""
+
     pro_skills: dict = Field(
-        default_factory=lambda: {"debater_1": "munger-perspective",
+        default_factory=lambda: {"debater_1": None,
                                  "debater_2": None,
-                                 "debater_3": None}
+                                 "debater_3": None,
+                                 "debater_4": None}
     )
     con_skills: dict = Field(
         default_factory=lambda: {"debater_1": None,
                                  "debater_2": None,
-                                 "debater_3": None}
+                                 "debater_3": None,
+                                 "debater_4": None}
     )
     judge_skill: str | None = None
 
     debate_history: list[dict] = Field(default_factory=list)
     paused: bool = False
     debater_status: dict[str, str] = Field(default_factory=lambda: {
-        "pro_1": "waiting", "pro_2": "waiting", "pro_3": "waiting",
-        "con_1": "waiting", "con_2": "waiting", "con_3": "waiting",
+        "pro_1": "waiting", "pro_2": "waiting", "pro_3": "waiting", "pro_4": "waiting",
+        "con_1": "waiting", "con_2": "waiting", "con_3": "waiting", "con_4": "waiting",
         "judge": "waiting",
     })
     verdict: dict | None = None
@@ -62,12 +70,14 @@ class SkillConfig(BaseModel):
     debater_1: str | None = None
     debater_2: str | None = None
     debater_3: str | None = None
+    debater_4: str | None = None
 
 
 class StartDebateRequest(BaseModel):
     """Payload to start a new debate."""
 
     topic: str
+    format: str = Field(default="cdwc")
     rounds: int = Field(default=1, ge=1, le=3)
     pro_skills: SkillConfig = Field(default_factory=SkillConfig)
     con_skills: SkillConfig = Field(default_factory=SkillConfig)
@@ -89,6 +99,7 @@ class DebateSummary(BaseModel):
 
     id: str
     topic: str
+    format: str = "standard"
     total_rounds: int
     status: str
     pro_skills: dict
@@ -126,6 +137,23 @@ class SSESpeechChunk(BaseModel):
     content: str
 
 
+class SSECrossQChunk(BaseModel):
+    type: Literal["cross_q_chunk"] = "cross_q_chunk"
+    debate_id: str
+    examiner: str
+    target: str
+    content: str
+    round: int
+
+
+class SSECrossAChunk(BaseModel):
+    type: Literal["cross_a_chunk"] = "cross_a_chunk"
+    debate_id: str
+    responder: str
+    content: str
+    round: int
+
+
 class SSEPhaseEnd(BaseModel):
     type: Literal["phase_end"] = "phase_end"
     debate_id: str
@@ -150,6 +178,16 @@ class SSEResumed(BaseModel):
     debate_id: str
 
 
+class SSEStateSnapshot(BaseModel):
+    """Pushed to sync debater_status changes to frontend."""
+
+    type: Literal["state_snapshot"] = "state_snapshot"
+    debate_id: str
+    current_phase: str
+    current_debater: str
+    debater_status: dict
+
+
 class SSEDebateEnd(BaseModel):
     type: Literal["debate_end"] = "debate_end"
     debate_id: str
@@ -162,92 +200,20 @@ class SSEHistoryReplay(BaseModel):
     type: Literal["history_replay"] = "history_replay"
     debate_id: str
     topic: str
+    format: str = "standard"
     total_rounds: int
     current_round: int
     current_phase: str
-    current_debater: str = ""
     paused: bool
     status: str
     pro_skills: dict = Field(default_factory=dict)
     con_skills: dict = Field(default_factory=dict)
     judge_skill: str | None = None
-    debater_status: dict[str, str] = Field(default_factory=dict)
+    debater_status: dict = Field(default_factory=dict)
     speeches: list[dict] = Field(default_factory=list)
-
-
-class SSEStateSnapshot(BaseModel):
-    """Pushed on every debater status change (speaking/done/waiting)."""
-    type: Literal["state_snapshot"] = "state_snapshot"
-    debate_id: str
-    current_round: int
-    total_rounds: int
-    current_phase: str
-    current_debater: str
-    debater_status: dict[str, str]
-    paused: bool
-
-
-class SSEDebaterStatusChange(BaseModel):
-    """Pushed on per-debater status transition (thinking/speaking).
-
-    Lightweight event that the frontend uses to update a single
-    debater's badge without receiving a full state_snapshot.
-    """
-    type: Literal["debater_status_change"] = "debater_status_change"
-    debate_id: str
-    debater: str
-    status: str  # "thinking" | "speaking"
 
 
 class SSEError(BaseModel):
     type: Literal["error"] = "error"
     debate_id: str
     message: str
-
-
-class DebateListItem(BaseModel):
-    """Single debate row in the history list response."""
-    id: str
-    topic: str
-    status: str
-    total_rounds: int
-    winner: str | None = None
-    created_at: str
-    finished_at: str | None = None
-
-
-# ── Auth models ──────────────────────────────────────────────────────────────
-
-
-class RegisterRequest(BaseModel):
-    """Payload for user registration."""
-    username: str = Field(min_length=2, max_length=50)
-    password: str = Field(min_length=4, max_length=128)
-
-
-class LoginRequest(BaseModel):
-    """Payload for user login."""
-    username: str
-    password: str
-
-
-class UserInfo(BaseModel):
-    """Public user info returned in auth responses."""
-    id: str
-    username: str
-    is_admin: bool
-
-
-class AuthResponse(BaseModel):
-    """Response for register/login endpoints."""
-    token: str
-    user: UserInfo
-
-
-class AdminUserItem(BaseModel):
-    """User row in admin panel list."""
-    id: str
-    username: str
-    is_admin: bool
-    debate_count: int
-    created_at: str

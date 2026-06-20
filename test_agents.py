@@ -232,6 +232,16 @@ class TestCreateProAgent(unittest.TestCase):
         )
         self.assertEqual(agent.role, "正方三辩")
 
+    def test_position_4_role(self):
+        """Position 4 creates 正方四辩."""
+        agent = create_pro_agent(
+            debate_id="debate-1",
+            position=4,
+            topic="Test",
+            skill_name=None,
+        )
+        self.assertEqual(agent.role, "正方四辩")
+
     def test_goal_is_set(self):
         """Agent goal matches PRO_ROLES definition."""
         agent = create_pro_agent(
@@ -285,6 +295,16 @@ class TestCreateConAgent(unittest.TestCase):
             skill_name=None,
         )
         self.assertEqual(agent.role, "反方三辩")
+
+    def test_position_4_role(self):
+        """Position 4 creates 反方四辩."""
+        agent = create_con_agent(
+            debate_id="debate-1",
+            position=4,
+            topic="Test",
+            skill_name=None,
+        )
+        self.assertEqual(agent.role, "反方四辩")
 
     def test_goal_is_set(self):
         """Agent goal matches CON_ROLES definition."""
@@ -396,15 +416,17 @@ class TestBuildBackstoryWithSkillIntegration(unittest.TestCase):
 class TestPhaseContext(unittest.TestCase):
     """Tests for PHASE_CONTEXT constant."""
 
-    def test_has_all_ten_phases(self):
-        """PHASE_CONTEXT contains all 10 expected phases."""
+    def test_has_all_twelve_phases(self):
+        """PHASE_CONTEXT contains all 12 expected phases."""
         expected_phases = {
             "pro_opening",
             "con_opening",
             "pro_rebuttal",
             "con_rebuttal",
-            "pro_argument",
-            "con_argument",
+            "pro_cross_examine",
+            "con_cross_examine",
+            "pro_cross_summary",
+            "con_cross_summary",
             "free_debate",
             "pro_closing",
             "con_closing",
@@ -422,13 +444,13 @@ class TestPhaseContext(unittest.TestCase):
 class TestRolesConstants(unittest.TestCase):
     """Tests for PRO_ROLES, CON_ROLES, JUDGE_ROLE constants."""
 
-    def test_pro_roles_has_three_positions(self):
-        """PRO_ROLES has keys 1, 2, 3."""
-        self.assertEqual(set(PRO_ROLES.keys()), {1, 2, 3})
+    def test_pro_roles_has_four_positions(self):
+        """PRO_ROLES has keys 1, 2, 3, 4."""
+        self.assertEqual(set(PRO_ROLES.keys()), {1, 2, 3, 4})
 
-    def test_con_roles_has_three_positions(self):
-        """CON_ROLES has keys 1, 2, 3."""
-        self.assertEqual(set(CON_ROLES.keys()), {1, 2, 3})
+    def test_con_roles_has_four_positions(self):
+        """CON_ROLES has keys 1, 2, 3, 4."""
+        self.assertEqual(set(CON_ROLES.keys()), {1, 2, 3, 4})
 
     def test_each_pro_role_has_required_keys(self):
         """Each PRO_ROLES entry has role, goal, backstory."""

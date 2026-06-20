@@ -1,110 +1,3 @@
-// ---- Auth State ----
-let currentUser = null;
-
-function getToken() {
-    return localStorage.getItem('debate_token');
-}
-
-function setToken(token) {
-    localStorage.setItem('debate_token', token);
-}
-
-function clearToken() {
-    localStorage.removeItem('debate_token');
-}
-
-// ---- Auth UI ----
-
-function showAuthPanel() {
-    document.getElementById('auth-panel').classList.remove('hidden');
-    document.getElementById('user-bar').classList.add('hidden');
-    document.getElementById('main-content').classList.add('hidden');
-}
-
-function showMainUI(user) {
-    currentUser = user;
-    document.getElementById('auth-panel').classList.add('hidden');
-    document.getElementById('user-bar').classList.remove('hidden');
-    document.getElementById('main-content').classList.remove('hidden');
-    document.getElementById('current-username').textContent = user.username;
-
-    if (user.is_admin) {
-        document.getElementById('admin-link').classList.remove('hidden');
-    }
-
-    loadSkills();
-    loadDebateList();
-}
-
-// ---- Auth API ----
-
-async function handleLogin(e) {
-    e.preventDefault();
-    const username = document.getElementById('login-username').value.trim();
-    const password = document.getElementById('login-password').value;
-    const errEl = document.getElementById('login-error');
-    errEl.textContent = '';
-
-    try {
-        const resp = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) {
-            errEl.textContent = data.detail || 'Login failed';
-            return;
-        }
-        setToken(data.token);
-        showMainUI(data.user);
-    } catch (err) {
-        errEl.textContent = 'Network error: ' + err.message;
-    }
-}
-
-async function handleRegister(e) {
-    e.preventDefault();
-    const username = document.getElementById('register-username').value.trim();
-    const password = document.getElementById('register-password').value;
-    const errEl = document.getElementById('register-error');
-    const succEl = document.getElementById('register-success');
-    errEl.textContent = '';
-    succEl.textContent = '';
-
-    try {
-        const resp = await fetch('/api/auth/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) {
-            errEl.textContent = data.detail || 'Registration failed';
-            return;
-        }
-        succEl.textContent = '注册成功！正在登录...';
-        setToken(data.token);
-        setTimeout(() => showMainUI(data.user), 500);
-    } catch (err) {
-        errEl.textContent = 'Network error: ' + err.message;
-    }
-}
-
-function logout() {
-    clearToken();
-    currentUser = null;
-    if (eventSource) { eventSource.close(); eventSource = null; }
-    showAuthPanel();
-}
-
-// ---- Auth header helper ----
-
-function authHeaders() {
-    const token = getToken();
-    return token ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
-}
-
 // ---- State ----
 let currentDebateId = null;
 let eventSource = null;
@@ -148,68 +41,82 @@ function clearRenderQueue(debater) {
 // ── Phase name map (shared) ──
 const PHASE_NAMES = {
     'begin': '准备中',
-    'pro_opening': '正方立论',
-    'con_opening': '反方立论',
-    'pro_rebuttal': '正方驳论',
-    'con_rebuttal': '反方驳论',
-    'pro_argument': '正方论证',
-    'con_argument': '反方论证',
+    'pro_opening': '正方一辩立论',
+    'con_opening': '反方一辩立论',
+    'pro_rebuttal': '正方二辩驳论',
+    'con_rebuttal': '反方二辩驳论',
+    'pro_cross_examine': '正方三辩质询',
+    'con_cross_examine': '反方三辩质询',
+    'pro_cross_summary': '正方三辩质询小结',
+    'con_cross_summary': '反方三辩质询小结',
     'free_debate': '自由辩论',
-    'pro_closing': '正方总结',
-    'con_closing': '反方总结',
+    'pro_closing': '正方四辩总结',
+    'con_closing': '反方四辩总结',
     'verdict': '裁判裁决',
 };
 
+const CDWC_PHASES = [
+    'pro_opening', 'con_opening', 'pro_rebuttal', 'con_rebuttal',
+    'pro_cross_examine', 'con_cross_examine', 'pro_cross_summary', 'con_cross_summary',
+    'free_debate', 'con_closing', 'pro_closing'
+];
+
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
-    // Auth tab switching
-    document.querySelectorAll('.auth-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
-            const isLogin = tab.dataset.tab === 'login';
-            document.getElementById('login-form').classList.toggle('hidden', !isLogin);
-            document.getElementById('register-form').classList.toggle('hidden', isLogin);
-        });
-    });
-
-    // Debate controls
+    loadSkills();
     document.getElementById('start-btn').addEventListener('click', startDebate);
     document.getElementById('pause-btn').addEventListener('click', pauseDebate);
     document.getElementById('resume-btn').addEventListener('click', resumeDebate);
     document.getElementById('new-debate-btn').addEventListener('click', resetToNewDebate);
-    document.getElementById('back-list-btn').addEventListener('click', showHistoryPanel);
 
-    // Check if already logged in
-    checkAuth();
+    // Check for active debate on page load (reconnection)
+    checkActiveDebate();
 });
 
-async function checkAuth() {
-    const token = getToken();
-    if (!token) {
-        showAuthPanel();
-        return;
-    }
-
-    try {
-        const resp = await fetch('/api/auth/me', {
-            headers: { 'Authorization': 'Bearer ' + token }
-        });
-        if (!resp.ok) {
-            clearToken();
-            showAuthPanel();
-            return;
-        }
-        const data = await resp.json();
-        showMainUI(data.user);
-    } catch (err) {
-        showAuthPanel();
-    }
-}
-
-// Page load now handled by loadDebateList() — history list is default view.
+// ── Reconnection: check for unfinished debate ──
 async function checkActiveDebate() {
-    loadDebateList();
+    try {
+        const resp = await fetch('/api/debate/active');
+        const data = await resp.json();
+        if (data.active && data.debate) {
+            const debate = data.debate;
+            currentDebateId = debate.id;
+
+            // Hide config, show debate grid
+            document.getElementById('debate-grid').style.display = 'grid';
+            document.getElementById('control-bar').style.display = 'flex';
+            document.getElementById('verdict-section').style.display = 'none';
+            document.getElementById('config-panel').style.display = 'none';
+            document.getElementById('new-debate-btn').style.display = 'inline-block';
+
+            // Restore control info
+            updateControlInfoFromDebate(debate);
+
+            // Restore past speeches into cells
+            restoreSpeeches(debate.speeches || []);
+
+            // If debate is finished, show verdict if available
+            if (debate.status === 'finished') {
+                if (debate.verdict && debate.winner) {
+                    showVerdict(debate.verdict, debate.winner);
+                }
+                document.getElementById('pause-btn').disabled = true;
+                document.getElementById('resume-btn').disabled = true;
+                return;
+            }
+
+            // Connect SSE for live events
+            connectSSE(currentDebateId);
+
+            // If debate was paused, set button states
+            if (debate.status === 'paused') {
+                document.getElementById('pause-btn').disabled = true;
+                document.getElementById('resume-btn').disabled = false;
+            }
+        }
+    } catch (err) {
+        console.error('Failed to check active debate:', err);
+    }
 }
 
 function restoreSpeeches(speeches) {
@@ -240,17 +147,15 @@ function restoreSpeeches(speeches) {
 }
 
 function updateControlInfoFromDebate(debate) {
-    if (debate.current_round && debate.total_rounds) {
-        document.getElementById('round-info').textContent =
-            `第 ${debate.current_round}/${debate.total_rounds} 轮`;
-    } else {
-        document.getElementById('round-info').textContent =
-            `共 ${debate.total_rounds || '?'} 轮`;
+    if (debate.format) {
+        const formatMap = { cdwc: '新国辩 CDWC', standard: '标准 3v3' };
+        document.getElementById('format-info').textContent = formatMap[debate.format] || debate.format;
     }
     if (debate.current_phase) {
         document.getElementById('phase-info').textContent =
             PHASE_NAMES[debate.current_phase] || debate.current_phase;
     }
+    updatePhaseProgress(debate.current_phase);
 }
 
 function showVerdict(verdict, winner) {
@@ -264,13 +169,13 @@ function showVerdict(verdict, winner) {
     // Scores
     const proScores = verdict.pro_scores || {};
     const conScores = verdict.con_scores || {};
-    const dimensionKeys = ['argument', 'rebuttal', 'expression', 'teamwork'];
-    const dimensions = ['论证严谨度', '数据与事实支撑', '反驳有效性', '表达清晰度'];
-    dimensionKeys.forEach((key, i) => {
+    const dimNames = ['论证严谨度', '数据与事实支撑', '反驳有效性', '质询有效性', '表达清晰度'];
+    const dimKeys = ['argument', 'evidence', 'rebuttal', 'cross', 'expression'];
+    dimKeys.forEach((key, i) => {
         const proCell = document.getElementById(`score-${key}-pro`);
         const conCell = document.getElementById(`score-${key}-con`);
-        if (proCell) proCell.textContent = proScores[dimensions[i]] || '-';
-        if (conCell) conCell.textContent = conScores[dimensions[i]] || '-';
+        if (proCell) proCell.textContent = proScores[dimNames[i]] || '-';
+        if (conCell) conCell.textContent = conScores[dimNames[i]] || '-';
     });
     const proTotal = document.getElementById('score-total-pro');
     const conTotal = document.getElementById('score-total-con');
@@ -293,7 +198,6 @@ function resetToNewDebate() {
     document.getElementById('control-bar').style.display = 'none';
     document.getElementById('verdict-section').style.display = 'none';
     document.getElementById('new-debate-btn').style.display = 'none';
-    document.getElementById('back-list-btn').style.display = 'none';
 
     clearAllCells();
 
@@ -305,14 +209,14 @@ function resetToNewDebate() {
 // ── Skills ──
 async function loadSkills() {
     try {
-        const resp = await fetch('/api/skills', { headers: authHeaders() });
+        const resp = await fetch('/api/skills');
         const data = await resp.json();
         const skills = data.skills || [];
 
         // Populate all 7 skill selects
         const selects = [
-            'pro-skills-1', 'pro-skills-2', 'pro-skills-3',
-            'con-skills-1', 'con-skills-2', 'con-skills-3',
+            'pro-skills-1', 'pro-skills-2', 'pro-skills-3', 'pro-skills-4',
+            'con-skills-1', 'con-skills-2', 'con-skills-3', 'con-skills-4',
             'judge-skill'
         ];
 
@@ -340,25 +244,29 @@ async function startDebate() {
     }
 
     const rounds = parseInt(document.getElementById('rounds-select').value);
+    const format = document.getElementById('format-select').value;
 
     const proSkills = {
         debater_1: document.getElementById('pro-skills-1').value || null,
         debater_2: document.getElementById('pro-skills-2').value || null,
         debater_3: document.getElementById('pro-skills-3').value || null,
+        debater_4: document.getElementById('pro-skills-4').value || null,
     };
     const conSkills = {
         debater_1: document.getElementById('con-skills-1').value || null,
         debater_2: document.getElementById('con-skills-2').value || null,
         debater_3: document.getElementById('con-skills-3').value || null,
+        debater_4: document.getElementById('con-skills-4').value || null,
     };
     const judgeSkill = document.getElementById('judge-skill').value || null;
 
     try {
         const resp = await fetch('/api/debate/start', {
             method: 'POST',
-            headers: authHeaders(),
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 topic,
+                format,
                 rounds,
                 pro_skills: proSkills,
                 con_skills: conSkills,
@@ -377,8 +285,6 @@ async function startDebate() {
 
         // Show debate grid, hide verdict
         document.getElementById('debate-grid').style.display = 'grid';
-        document.getElementById('history-panel').style.display = 'none';
-        document.getElementById('back-list-btn').style.display = 'inline-block';
         document.getElementById('control-bar').style.display = 'flex';
         document.getElementById('verdict-section').style.display = 'none';
         document.getElementById('config-panel').style.display = 'none';
@@ -401,7 +307,7 @@ function connectSSE(debateId) {
         eventSource.close();
     }
 
-    eventSource = new EventSource('/api/debate/' + debateId + '/stream?token=' + encodeURIComponent(getToken()));
+    eventSource = new EventSource(`/api/debate/${debateId}/stream`);
 
     eventSource.onmessage = (event) => {
         try {
@@ -434,7 +340,6 @@ function handleSSEMessage(msg) {
             }
 
             restoreSpeeches(msg.speeches || []);
-            updateAllStatusBadges(msg.debater_status || {});
 
             if (msg.status === 'finished' && msg.verdict) {
                 showVerdict(msg.verdict, msg.winner);
@@ -445,13 +350,32 @@ function handleSSEMessage(msg) {
 
         case 'state_snapshot':
             updateControlInfo(msg.current_round, msg.total_rounds, msg.current_phase);
-            updateAllStatusBadges(msg.debater_status || {});
             if (msg.paused) {
                 document.getElementById('pause-btn').disabled = true;
                 document.getElementById('resume-btn').disabled = false;
-            } else {
-                document.getElementById('pause-btn').disabled = false;
-                document.getElementById('resume-btn').disabled = true;
+            }
+            if (msg.debater_status) {
+                for (const [debater, status] of Object.entries(msg.debater_status)) {
+                    const statusEl = document.getElementById(`status-${debater}`);
+                    if (statusEl) {
+                        const statusMap = {
+                            'thinking': '思考中...',
+                            'speaking': '发言中...',
+                            'done': '已完成',
+                            'waiting': '等待中',
+                        };
+                        statusEl.textContent = statusMap[status] || status;
+                        statusEl.className = 'status-badge';
+                        if (status === 'speaking') statusEl.className += ' active-badge';
+                        if (status === 'done') statusEl.className += ' done-badge';
+                    }
+                }
+            }
+            if (msg.current_phase) {
+                document.getElementById('phase-info').textContent =
+                    PHASE_NAMES[msg.current_phase] || msg.current_phase;
+                // Update phase progress dots
+                updatePhaseProgress(msg.current_phase);
             }
             break;
 
@@ -466,6 +390,9 @@ function handleSSEMessage(msg) {
             activeSpeaker = msg.debater;
             const cell = document.getElementById(`cell-${msg.debater}`);
             if (cell) cell.classList.add('active');
+            const status = document.getElementById(`status-${msg.debater}`);
+            if (status) status.textContent = '发言中...';
+
             updateControlInfo(msg.round_num, null, msg.phase);
 
             // Clear thinking/speech for this debater
@@ -474,6 +401,16 @@ function handleSSEMessage(msg) {
             const speechEl = document.getElementById(`speech-${msg.debater}`);
             if (speechEl) speechEl.textContent = '';
             clearRenderQueue(msg.debater);
+
+            updatePhaseProgress(msg.phase);
+            // Hide cross-examine panel when entering non-cross phases
+            const phaseIsCross = msg.phase === 'pro_cross_examine' || msg.phase === 'con_cross_examine';
+            const crossPnl = document.getElementById('cross-examine-panel');
+            if (crossPnl && !phaseIsCross) {
+                crossPnl.classList.remove('visible');
+                document.getElementById('cross-examiner-speeches').innerHTML = '';
+                document.getElementById('cross-responder-speeches').innerHTML = '';
+            }
             break;
 
         case 'thinking_chunk':
@@ -492,7 +429,36 @@ function handleSSEMessage(msg) {
             enqueueChunk(msg.debater, msg.content);
             break;
 
+        case 'cross_q_chunk':
+            const crossPanel = document.getElementById('cross-examine-panel');
+            if (crossPanel) {
+                crossPanel.classList.add('visible');
+                document.getElementById('cross-examiner-label').textContent =
+                    msg.examiner.replace('pro_', '正方').replace('con_', '反方') + '辩 提问';
+                document.getElementById('cross-round-badge').textContent =
+                    `第 ${msg.round} 轮`;
+                const qDiv = document.createElement('div');
+                qDiv.className = 'cross-q-entry';
+                qDiv.innerHTML = `<div class="cross-speech" style="border-left:3px solid #4fc3f7;">${msg.content}</div>`;
+                document.getElementById('cross-examiner-speeches').appendChild(qDiv);
+            }
+            break;
+
+        case 'cross_a_chunk':
+            const crossP = document.getElementById('cross-examine-panel');
+            if (crossP) {
+                document.getElementById('cross-responder-label').textContent =
+                    msg.responder.replace('pro_', '正方').replace('con_', '反方') + '辩 回答';
+                const aDiv = document.createElement('div');
+                aDiv.className = 'cross-q-entry';
+                aDiv.innerHTML = `<div class="cross-speech" style="border-left:3px solid #ef5350;">${msg.content}</div>`;
+                document.getElementById('cross-responder-speeches').appendChild(aDiv);
+            }
+            break;
+
         case 'phase_end':
+            const endStatus = document.getElementById(`status-${msg.debater}`);
+            if (endStatus) endStatus.textContent = '已完成';
             break;
 
         case 'verdict_chunk':
@@ -538,14 +504,13 @@ function renderVerdict(verdict) {
 
     const proScores = verdict.pro_scores || {};
     const conScores = verdict.con_scores || {};
-    const dimensions = ['论证严谨度', '数据与事实支撑', '反驳有效性', '表达清晰度'];
-
-    const dimensionKeys = ['argument', 'rebuttal', 'expression', 'teamwork'];
-    dimensionKeys.forEach((key, i) => {
+    const dimNames = ['论证严谨度', '数据与事实支撑', '反驳有效性', '质询有效性', '表达清晰度'];
+    const dimKeys = ['argument', 'evidence', 'rebuttal', 'cross', 'expression'];
+    dimKeys.forEach((key, i) => {
         const proCell = document.getElementById(`score-${key}-pro`);
         const conCell = document.getElementById(`score-${key}-con`);
-        if (proCell) proCell.textContent = proScores[dimensions[i]] || '-';
-        if (conCell) conCell.textContent = conScores[dimensions[i]] || '-';
+        if (proCell) proCell.textContent = proScores[dimNames[i]] || '-';
+        if (conCell) conCell.textContent = conScores[dimNames[i]] || '-';
     });
 
     const proTotal = document.getElementById('score-total-pro');
@@ -578,10 +543,14 @@ function updateControlInfo(round, totalRounds, phase) {
         pauseBtn.disabled = false;
         resumeBtn.disabled = true;
     }
+
+    if (phase) {
+        updatePhaseProgress(phase);
+    }
 }
 
 function clearAllCells() {
-    ['pro_1', 'pro_2', 'pro_3', 'con_1', 'con_2', 'con_3'].forEach(key => {
+    ['pro_1', 'pro_2', 'pro_3', 'pro_4', 'con_1', 'con_2', 'con_3', 'con_4'].forEach(key => {
         const cell = document.getElementById(`cell-${key}`);
         if (cell) cell.classList.remove('active');
         const status = document.getElementById(`status-${key}`);
@@ -597,169 +566,17 @@ function clearAllCells() {
     activeSpeaker = null;
 }
 
-// ── History List ──
-async function loadDebateList() {
-    try {
-        const [debatesResp, activeResp] = await Promise.all([
-            fetch('/api/debates', { headers: authHeaders() }),
-            fetch('/api/debate/active', { headers: authHeaders() }),
-        ]);
-        const debatesData = await debatesResp.json();
-        const debates = debatesData.debates || [];
-
-        const activeDebates = debates.filter(d => d.status === 'running' || d.status === 'paused');
-        const historyDebates = debates.filter(d => d.status === 'finished');
-
-        // Show history panel, hide everything else
-        document.getElementById('history-panel').style.display = 'block';
-        document.getElementById('config-panel').style.display = 'none';
-        document.getElementById('debate-grid').style.display = 'none';
-        document.getElementById('control-bar').style.display = 'none';
-        document.getElementById('verdict-section').style.display = 'none';
-        document.getElementById('new-debate-btn').style.display = 'none';
-        document.getElementById('back-list-btn').style.display = 'none';
-
-        // Render sections
-        renderDebateSection('active-debates-section', '进行中', activeDebates);
-        renderDebateSection('history-debates-section', '已完成', historyDebates);
-
-        const emptyEl = document.getElementById('history-empty');
-        emptyEl.style.display = debates.length === 0 ? 'block' : 'none';
-    } catch (err) {
-        console.error('Failed to load debate list:', err);
-    }
-}
-
-function renderDebateSection(containerId, title, debates) {
-    const container = document.getElementById(containerId);
-    if (debates.length === 0) {
-        container.innerHTML = '';
-        return;
-    }
-
-    let html = `<div class="history-section-title">${title}</div>`;
-    debates.forEach(d => {
-        const statusLabels = { running: '进行中', paused: '已暂停', finished: '已完成' };
-        const statusClass = d.status;
-        const statusLabel = statusLabels[d.status] || d.status;
-        const timeLabel = formatTime(d.created_at);
-        const actionLabel = d.status === 'finished' ? '查看回放' : '进入';
-        const winnerMap = { pro: '正方胜', con: '反方胜', draw: '平局' };
-        const resultText = d.winner ? ` · ${winnerMap[d.winner] || d.winner}` : '';
-
-        html += `
-            <div class="history-item">
-                <div class="history-item-meta">
-                    <div class="history-item-topic">${escapeHtml(d.topic)}</div>
-                    <div class="history-item-info">
-                        <span>${timeLabel}</span>
-                        <span>${d.total_rounds}轮</span>
-                        <span class="history-status ${statusClass}">${statusLabel}${resultText}</span>
-                    </div>
-                </div>
-                <div class="history-item-action">
-                    <button onclick="enterDebate('${d.id}', '${d.status}')">${actionLabel}</button>
-                </div>
-            </div>`;
-    });
-    container.innerHTML = html;
-}
-
-function formatTime(ts) {
-    if (!ts) return '';
-    try {
-        const d = new Date(ts + 'Z');
-        const now = new Date();
-        const diffMs = now - d;
-        const diffMins = Math.floor(diffMs / 60000);
-        if (diffMins < 1) return '刚刚';
-        if (diffMins < 60) return `${diffMins}分钟前`;
-        const diffHours = Math.floor(diffMins / 60);
-        if (diffHours < 24) return `${diffHours}小时前`;
-        const diffDays = Math.floor(diffHours / 24);
-        if (diffDays < 7) return `${diffDays}天前`;
-        return d.toLocaleDateString('zh-CN');
-    } catch (e) {
-        return ts;
-    }
-}
-
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-async function enterDebate(debateId, status) {
-    currentDebateId = debateId;
-
-    // Show debate grid
-    document.getElementById('history-panel').style.display = 'none';
-    document.getElementById('config-panel').style.display = 'none';
-    document.getElementById('debate-grid').style.display = 'grid';
-    document.getElementById('control-bar').style.display = 'flex';
-    document.getElementById('verdict-section').style.display = 'none';
-    document.getElementById('new-debate-btn').style.display = 'inline-block';
-    document.getElementById('back-list-btn').style.display = 'inline-block';
-
-    clearAllCells();
-
-    if (status === 'finished') {
-        // Load full debate data for replay
-        try {
-            const resp = await fetch(`/api/debate/${debateId}`, { headers: authHeaders() });
-            const debate = await resp.json();
-            document.getElementById('round-info').textContent = `共 ${debate.total_rounds} 轮`;
-            document.getElementById('phase-info').textContent = '已完成';
-            document.getElementById('pause-btn').disabled = true;
-            document.getElementById('resume-btn').disabled = true;
-            restoreSpeeches(debate.speeches || []);
-            if (debate.verdict && debate.winner) {
-                showVerdict(debate.verdict, debate.winner);
-            }
-            updateAllStatusBadges(debate.debater_status || {});
-        } catch (err) {
-            showError('加载辩论失败: ' + err.message);
-        }
-    } else {
-        // Connect SSE for live debate
-        document.getElementById('pause-btn').disabled = false;
-        document.getElementById('resume-btn').disabled = true;
-        connectSSE(debateId);
-    }
-}
-
-function updateAllStatusBadges(debaterStatus) {
-    const allKeys = ['pro_1', 'pro_2', 'pro_3', 'con_1', 'con_2', 'con_3'];
-    allKeys.forEach(key => {
-        const status = debaterStatus[key] || 'waiting';
-        setBadgeStatus(key, status);
-    });
-}
-
-function setBadgeStatus(debater, status) {
-    const badge = document.getElementById(`status-${debater}`);
-    if (!badge) return;
-    badge.classList.remove('active-badge', 'done-badge');
-    if (status === 'speaking') {
-        badge.textContent = '发言中';
-        badge.classList.add('active-badge');
-    } else if (status === 'done') {
-        badge.textContent = '已完成';
-        badge.classList.add('done-badge');
-    } else {
-        badge.textContent = '等待中';
-    }
-}
-
-function showHistoryPanel() {
-    if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-    }
-    currentDebateId = null;
-    activeSpeaker = null;
-    loadDebateList();
+function updatePhaseProgress(currentPhase) {
+    const bar = document.getElementById('phase-progress');
+    if (!bar) return;
+    bar.classList.add('visible');
+    const idx = CDWC_PHASES.indexOf(currentPhase);
+    bar.innerHTML = CDWC_PHASES.map((p, i) => {
+        let cls = 'phase-dot';
+        if (i < idx) cls += ' done';
+        else if (i === idx) cls += ' active';
+        return `<span class="${cls}" title="${PHASE_NAMES[p] || p}"></span>`;
+    }).join('');
 }
 
 function showError(message) {
@@ -774,7 +591,7 @@ function showError(message) {
 async function pauseDebate() {
     if (!currentDebateId) return;
     try {
-        await fetch(`/api/debate/${currentDebateId}/pause`, { method: 'POST', headers: authHeaders() });
+        await fetch(`/api/debate/${currentDebateId}/pause`, { method: 'POST' });
     } catch (err) {
         showError('暂停失败: ' + err.message);
     }
@@ -783,7 +600,7 @@ async function pauseDebate() {
 async function resumeDebate() {
     if (!currentDebateId) return;
     try {
-        await fetch(`/api/debate/${currentDebateId}/resume`, { method: 'POST', headers: authHeaders() });
+        await fetch(`/api/debate/${currentDebateId}/resume`, { method: 'POST' });
     } catch (err) {
         showError('恢复失败: ' + err.message);
     }
