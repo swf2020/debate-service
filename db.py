@@ -66,6 +66,21 @@ async def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_speeches_debate_id
                 ON speeches(debate_id);
         """)
+        # ── Migrations ─────────────────────────────────────────────────────
+        # Add format column to debates (CDWC support)
+        cols_raw = await db.execute("PRAGMA table_info(debates)")
+        cols = {row[1] for row in await cols_raw.fetchall()}
+        if "format" not in cols:
+            await db.execute(
+                "ALTER TABLE debates ADD COLUMN format TEXT NOT NULL DEFAULT 'standard'"
+            )
+        # Add speech_type column to speeches
+        speech_cols_raw = await db.execute("PRAGMA table_info(speeches)")
+        speech_cols = {row[1] for row in await speech_cols_raw.fetchall()}
+        if "speech_type" not in speech_cols:
+            await db.execute(
+                "ALTER TABLE speeches ADD COLUMN speech_type TEXT NOT NULL DEFAULT 'opening'"
+            )
         await db.commit()
     finally:
         await db.close()
@@ -86,19 +101,21 @@ async def create_debate(
     pro_skills: dict,
     con_skills: dict,
     judge_skill: str | None,
+    format: str = "cdwc",
 ) -> None:
     """INSERT a new debate row."""
     db = await get_db()
     try:
         await db.execute(
             """
-            INSERT INTO debates (id, topic, total_rounds, pro_skills, con_skills, judge_skill)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO debates (id, topic, total_rounds, format, pro_skills, con_skills, judge_skill)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 id,
                 topic,
                 total_rounds,
+                format,
                 json.dumps(pro_skills),
                 json.dumps(con_skills),
                 judge_skill,
@@ -212,16 +229,17 @@ async def insert_speech(
     thinking: str | None,
     content: str,
     seq: int,
+    speech_type: str = "opening",
 ) -> int:
     """INSERT a speech row.  Returns the auto-incremented id."""
     db = await get_db()
     try:
         cursor = await db.execute(
             """
-            INSERT INTO speeches (debate_id, debater, phase, round_num, thinking, content, seq)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO speeches (debate_id, debater, phase, round_num, thinking, content, seq, speech_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (debate_id, debater, phase, round_num, thinking, content, seq),
+            (debate_id, debater, phase, round_num, thinking, content, seq, speech_type),
         )
         await db.commit()
         return cursor.lastrowid  # type: ignore[return-value]
