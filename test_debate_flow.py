@@ -63,11 +63,13 @@ class TestFlowDefinition(unittest.TestCase):
             "con_1_opening",
             "pro_2_rebuttal",
             "con_2_rebuttal",
-            "pro_3_argument",
-            "con_3_argument",
+            "pro_3_cross_examine",
+            "con_3_cross_examine",
+            "pro_3_summary",
+            "con_3_summary",
             "free_debate",
-            "pro_3_closing",
-            "con_3_closing",
+            "con_4_closing",
+            "pro_4_closing",
             "judge_verdict",
         }
         self.assertTrue(
@@ -89,12 +91,14 @@ class TestFlowDefinition(unittest.TestCase):
             ("con_1_opening", "pro_1_opening"),
             ("pro_2_rebuttal", "con_1_opening"),
             ("con_2_rebuttal", "pro_2_rebuttal"),
-            ("pro_3_argument", "con_2_rebuttal"),
-            ("con_3_argument", "pro_3_argument"),
-            ("free_debate", "con_3_argument"),
-            ("pro_3_closing", "free_debate"),
-            ("con_3_closing", "pro_3_closing"),
-            ("judge_verdict", "con_3_closing"),
+            ("pro_3_cross_examine", "con_2_rebuttal"),
+            ("con_3_cross_examine", "pro_3_cross_examine"),
+            ("pro_3_summary", "con_3_cross_examine"),
+            ("con_3_summary", "pro_3_summary"),
+            ("free_debate", "con_3_summary"),
+            ("con_4_closing", "free_debate"),
+            ("pro_4_closing", "con_4_closing"),
+            ("judge_verdict", "pro_4_closing"),
         ]
         for method_name, expected_listen in chain:
             method = fd.methods[method_name]
@@ -215,11 +219,13 @@ class TestPhaseSequencing(unittest.TestCase):
             "con_1_opening",
             "pro_2_rebuttal",
             "con_2_rebuttal",
-            "pro_3_argument",
-            "con_3_argument",
+            "pro_3_cross_examine",
+            "con_3_cross_examine",
+            "pro_3_summary",
+            "con_3_summary",
             "free_debate",
-            "pro_3_closing",
-            "con_3_closing",
+            "con_4_closing",
+            "pro_4_closing",
             "judge_verdict",
         ]
         for m in methods:
@@ -338,7 +344,7 @@ class TestFreeDebate(unittest.TestCase):
     def test_single_round_has_6_speeches(self):
         speak_count = 0
 
-        async def _mock_run_phase(self_ref, key, phase, agent, ctx):
+        async def _mock_run_phase(self_ref, key, phase, agent, ctx, **kwargs):
             nonlocal speak_count
             speak_count += 1
             return f"Speech from {key}"
@@ -357,41 +363,8 @@ class TestFreeDebate(unittest.TestCase):
             # 3 pro + 3 con = 6 speeches for 1 round
             self.assertEqual(speak_count, 6,
                              f"Expected 6 speeches, got {speak_count}")
-            self.assertGreater(
-                self.flow.state.current_round,
-                self.flow.state.total_rounds,
-            )
-
-        asyncio.run(_run())
-
-    def test_multi_round_inner_body_re_runs(self):
-        speak_count = 0
-
-        async def _mock_run_phase(self_ref, key, phase, agent, ctx):
-            nonlocal speak_count
-            speak_count += 1
-            return f"Speech from {key}"
-
-        async def _run():
-            self.flow.state.total_rounds = 2
-            self.flow.state.current_round = 1
-            with patch("debate_flow.create_pro_agent") as mock_pro, \
-                 patch("debate_flow.create_con_agent") as mock_con, \
-                 patch.object(DebateFlow, "_run_agent_phase", _mock_run_phase):
-
-                mock_pro.return_value = _make_mock_agent()
-                mock_con.return_value = _make_mock_agent()
-                await self.flow.free_debate()
-
-            # Round 1: 6 free debate + 4 inner body = 10
-            # Round 2: 6 free debate                = 6
-            # Total:                                  16
-            self.assertEqual(speak_count, 16,
-                             f"Expected 16 speeches, got {speak_count}")
-            self.assertGreater(
-                self.flow.state.current_round,
-                self.flow.state.total_rounds,
-            )
+            # CDWC free_debate is always single-round; current_round stays at 1
+            self.assertEqual(self.flow.state.current_round, 1)
 
         asyncio.run(_run())
 

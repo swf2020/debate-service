@@ -19,11 +19,15 @@ from models import (
     SSEPhaseStart,
     SSEThinkingChunk,
     SSESpeechChunk,
+    SSECrossQChunk,
+    SSECrossAChunk,
     SSEPhaseEnd,
     SSEVerdictChunk,
     SSEPaused,
     SSEResumed,
+    SSEStateSnapshot,
     SSEDebateEnd,
+    SSEHistoryReplay,
     SSEError,
 )
 
@@ -58,9 +62,16 @@ def run_test(name: str, fn):
 def test_debate_state_defaults():
     s = DebateState()
     check("topic defaults to ''", s.topic == "")
-    check("total_rounds defaults to 2", s.total_rounds == 2)
+    check("total_rounds defaults to 1", s.total_rounds == 1)
     check("current_round defaults to 1", s.current_round == 1)
     check("current_phase defaults to ''", s.current_phase == "")
+    check("format defaults to cdwc", s.format == "cdwc")
+    check("current_debater defaults to ''", s.current_debater == "")
+    check("cross_examine_round defaults to 0", s.cross_examine_round == 0)
+    check("debater_status has pro_1 key", "pro_1" in s.debater_status)
+    check("debater_status has con_4 key", "con_4" in s.debater_status)
+    check("debater_status pro_1 is waiting", s.debater_status["pro_1"] == "waiting")
+    check("debater_status judge is waiting", s.debater_status["judge"] == "waiting")
     check("pro_skills has debater_1 key", "debater_1" in s.pro_skills)
     check("con_skills has debater_1 key", "debater_1" in s.con_skills)
     check("debate_history is empty list", s.debate_history == [])
@@ -211,6 +222,7 @@ def test_debate_summary():
     check("summary id", s.id == "s-1")
     check("summary winner", s.winner == "pro")
     check("summary speeches", s.speeches == [{"debater": "pro_1", "content": "hello"}])
+    check("summary format default", s.format == "standard")
     check("summary finished_at", s.finished_at == "2026-01-01T01:00:00")
 
 
@@ -225,6 +237,7 @@ def test_skill_config():
     check("SkillConfig debater_1 assigned", c.debater_1 == "skill-a")
     check("SkillConfig debater_2 assigned", c.debater_2 == "skill-b")
     check("SkillConfig debater_3 default None", c.debater_3 is None)
+    check("SkillConfig debater_4 default None", c.debater_4 is None)
 
 
 # ---------------------------------------------------------------------------
