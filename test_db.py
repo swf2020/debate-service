@@ -20,6 +20,7 @@ TMP_DB = _tmp.name
 _tmp.close()
 
 import db  # noqa: E402
+from auth import hash_password  # noqa: E402
 
 db.DB_PATH = TMP_DB  # redirect all connections to our temp file
 
@@ -70,7 +71,7 @@ async def run_tests() -> int:
     print("\n=== setup test user ===")
     test_user_id = None
     try:
-        test_user_id = await db.create_user("_test_user", "$2b$12$dummy", is_admin=False)
+        test_user_id = await db.create_user("_test_user", hash_password("testpass"), is_admin=False)
         assert test_user_id, "expected non-empty user id"
         ok(f"created test user with id={test_user_id}")
     except Exception as exc:
@@ -257,14 +258,15 @@ async def run_tests() -> int:
     # ── user CRUD ────────────────────────────────────────────────────────
     print("\n=== user CRUD ===")
     try:
-        user_id = await db.create_user("alice", "$2b$12$hashedhash1234567890abcdef", is_admin=False)
+        alice_hash = hash_password("testpass")
+        user_id = await db.create_user("alice", alice_hash, is_admin=False)
         assert user_id, f"expected non-empty user id, got {user_id!r}"
         ok(f"created user alice with id={user_id}")
 
         user = await db.get_user_by_username("alice")
         assert user is not None, "get_user_by_username returned None"
         assert user["username"] == "alice"
-        assert user["password_hash"] == "$2b$12$hashedhash1234567890abcdef"
+        assert user["password_hash"] == alice_hash
         assert user["is_admin"] == 0
         ok("get_user_by_username returns correct fields")
 
@@ -277,7 +279,7 @@ async def run_tests() -> int:
         assert missing is None
         ok("get_user_by_username returns None for missing user")
 
-        user_id2 = await db.create_user("bob", "$2b$12$hash2", is_admin=True)
+        user_id2 = await db.create_user("bob", hash_password("testpass"), is_admin=True)
         users = await db.get_all_users()
         assert len(users) >= 2
         ok(f"get_all_users returns {len(users)} users with debate counts")
