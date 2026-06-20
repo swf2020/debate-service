@@ -195,6 +195,7 @@ async def stream_debate(debate_id: str):
                 replay = SSEHistoryReplay(
                     debate_id=debate_id,
                     topic=state.topic,
+                    format=state.format,
                     total_rounds=state.total_rounds,
                     current_round=state.current_round,
                     current_phase=state.current_phase,
@@ -203,6 +204,7 @@ async def stream_debate(debate_id: str):
                     pro_skills=state.pro_skills,
                     con_skills=state.con_skills,
                     judge_skill=state.judge_skill,
+                    debater_status=state.debater_status,
                     speeches=[dict(s) for s in speeches],
                 )
                 yield f"data: {replay.model_dump_json()}\n\n"
@@ -213,6 +215,7 @@ async def stream_debate(debate_id: str):
                     replay = SSEHistoryReplay(
                         debate_id=debate_id,
                         topic=debate.get("topic", ""),
+                        format=debate.get("format", "cdwc"),
                         total_rounds=debate.get("total_rounds", 1),
                         current_round=0,
                         current_phase="",
