@@ -1,0 +1,17 @@
+[Unit]
+Description=Debate Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/debate-service
+EnvironmentFile=/etc/default/debate-env
+ExecStart=/opt/debate-service/.venv/bin/python /opt/debate-service/main.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

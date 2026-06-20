@@ -1,0 +1,7 @@
+[Unit]
+Description=Debate Service auto-deploy check
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/debate-service/deploy/deploy.sh
