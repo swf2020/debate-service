@@ -129,16 +129,18 @@ async def start_debate(req: StartDebateRequest):
     await create_debate(
         id=debate_id,
         topic=req.topic,
-        total_rounds=req.rounds,
+        total_rounds=1 if req.format == "cdwc" else req.rounds,
         pro_skills=req.pro_skills.model_dump(),
         con_skills=req.con_skills.model_dump(),
         judge_skill=req.judge_skill,
+        format=req.format,
     )
 
     # Create Flow
     flow = DebateFlow(debate_id)
     flow.state.topic = req.topic
-    flow.state.total_rounds = req.rounds
+    flow.state.format = req.format
+    flow.state.total_rounds = 1 if req.format == "cdwc" else req.rounds
     flow.state.pro_skills = req.pro_skills.model_dump()
     flow.state.con_skills = req.con_skills.model_dump()
     flow.state.judge_skill = req.judge_skill
