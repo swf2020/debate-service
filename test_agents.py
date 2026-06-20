@@ -346,7 +346,7 @@ class TestBuildBackstoryWithSkillIntegration(unittest.TestCase):
         self.llm = _make_llm()
 
     def test_agent_without_skill_uses_base_backstory(self):
-        """Without skill, backstory is unchanged base backstory."""
+        """Without skill, backstory contains base + caveman-perspective."""
         agent = create_agent(
             debate_id=self.debate_id,
             debater_key="pro_1",
@@ -355,10 +355,11 @@ class TestBuildBackstoryWithSkillIntegration(unittest.TestCase):
             skill_name=None,
             llm=self.llm,
         )
-        self.assertEqual(agent.backstory, PRO_ROLES[1]["backstory"])
+        self.assertIn(PRO_ROLES[1]["backstory"], agent.backstory)
+        self.assertIn("caveman-perspective", agent.backstory)
 
     def test_agent_with_nonexistent_skill_uses_base_backstory(self):
-        """With a nonexistent skill, backstory falls back to base."""
+        """With a nonexistent skill, backstory contains base + caveman-perspective."""
         agent = create_agent(
             debate_id=self.debate_id,
             debater_key="pro_1",
@@ -367,7 +368,8 @@ class TestBuildBackstoryWithSkillIntegration(unittest.TestCase):
             skill_name="not-a-real-perspective",
             llm=self.llm,
         )
-        self.assertEqual(agent.backstory, PRO_ROLES[1]["backstory"])
+        self.assertIn(PRO_ROLES[1]["backstory"], agent.backstory)
+        self.assertIn("caveman-perspective", agent.backstory)
 
     def test_agent_with_real_skill_has_extended_backstory(self):
         """With a real skill, backstory includes the skill content."""

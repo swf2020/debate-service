@@ -78,6 +78,16 @@ async def init_db() -> None:
         """)
         await db.commit()
 
+        # Ensure default admin account exists (admin / 1234)
+        import bcrypt as _bcrypt
+        admin_hash = _bcrypt.hashpw(b"1234", _bcrypt.gensalt()).decode("utf-8")
+        await db.execute(
+            "INSERT OR IGNORE INTO users (id, username, password_hash, is_admin)"
+            " VALUES (?, ?, ?, 1)",
+            ("admin-001", "admin", admin_hash),
+        )
+        await db.commit()
+
         # Migrate: add columns if missing (safe for fresh + existing DBs)
         existing = await db.execute("PRAGMA table_info(debates)")
         columns = {row[1] for row in await existing.fetchall()}

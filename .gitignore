@@ -11,9 +11,8 @@ build/
 .venv/
 venv/
 env/
-
-# Environment variables (contains API keys)
 .env
+# Environment variables (contains API keys)
 
 # SQLite databases
 *.db

@@ -11,15 +11,65 @@ ReAct loop and pushes SSE chunks via the thread-safe SSEBridge.
 
 from __future__ import annotations
 
+import contextvars
 import os
 from types import MethodType
 
 from crewai import Agent, LLM
 from crewai.agents.parser import AgentAction, AgentFinish
 
-from models import SSEThinkingChunk, SSESpeechChunk
+from models import SSEThinkingChunk, SSESpeechChunk, SSEDebaterStatusChange
 from skill_loader import build_backstory_with_skill
 from sse_bridge import sse_bridge
+
+
+# ---------------------------------------------------------------------------
+# Context var for per-debater thinking interceptor isolation
+# ---------------------------------------------------------------------------
+
+# Holds (debate_id, debater_key) for the currently executing agent.
+# Set by DebateFlow._run_agent_phase before execute_task, propagated
+# to worker threads via asyncio.to_thread context copying.
+_current_debater_ctx: contextvars.ContextVar[tuple[str, str] | None] = (
+    contextvars.ContextVar("current_debater", default=None)
+)
+
+
+def set_current_thinking_debater(debate_id: str, debater_key: str) -> contextvars.Token:
+    """Set the current debater context for the thinking interceptor.
+
+    Call before ``agent.execute_task()``.  The context propagates to the
+    worker thread where the LLM streaming hook reads it.
+    """
+    return _current_debater_ctx.set((debate_id, debater_key))
+
+
+def reset_current_thinking_debater(token: contextvars.Token) -> None:
+    """Reset the debater context after execute_task completes."""
+    _current_debater_ctx.reset(token)
+
+
+# ---------------------------------------------------------------------------
+# Per-debater speech-start callback registry
+# ---------------------------------------------------------------------------
+
+# Callbacks invoked when the first speech chunk arrives for a debater.
+# Used by DebateFlow to transition status from "thinking" -> "speaking".
+_speech_start_callbacks: dict[str, callable] = {}  # f"{debate_id}:{debater_key}" -> callback
+
+
+def register_first_speech_callback(debate_id: str, debater_key: str, callback: callable) -> None:
+    """Register a one-shot callback for when the first speech chunk arrives.
+
+    The callback is invoked exactly once (on the event loop via
+    ``call_soon_threadsafe``) and then auto-removed.
+    """
+    _speech_start_callbacks[f"{debate_id}:{debater_key}"] = callback
+
+
+def unregister_first_speech_callback(debate_id: str, debater_key: str) -> None:
+    """Remove the speech-start callback (e.g. on error or phase end)."""
+    _speech_start_callbacks.pop(f"{debate_id}:{debater_key}", None)
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +78,7 @@ from sse_bridge import sse_bridge
 
 
 def _make_llm(debate_id: str | None = None, debater_key: str | None = None) -> LLM:
-    """Create DeepSeek-v4-pro LLM with optional streaming hook for debaters."""
+    """Create DeepSeek-v4-pro LLM with streaming and thinking mode for debaters."""
     kwargs: dict = {
         "model": "deepseek/deepseek-v4-pro",
         "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
@@ -36,6 +86,9 @@ def _make_llm(debate_id: str | None = None, debater_key: str | None = None) -> L
     }
     if debate_id and debater_key:
         kwargs["stream"] = True
+        kwargs["additional_params"] = {
+            "extra_body": {"thinking": {"type": "enabled"}},
+        }
 
     llm = LLM(**kwargs)
 
@@ -55,9 +108,26 @@ def _install_stream_hook(llm: LLM, debate_id: str, debater_key: str) -> None:
     """
     original_emit = llm._emit_stream_chunk_event
 
+    _first_speech = True
+
     def patched_emit(self, chunk, from_task=None, from_agent=None,
                      tool_call=None, call_type=None, response_id=None):
+        nonlocal _first_speech
         if chunk and not tool_call:
+            if _first_speech:
+                _first_speech = False
+                # Push lightweight status change so frontend knows speech started.
+                sse_bridge.push(debate_id, SSEDebaterStatusChange(
+                    debate_id=debate_id,
+                    debater=debater_key,
+                    status="speaking",
+                ))
+                # Invoke callback so DebateFlow can update its state.
+                cb_key = f"{debate_id}:{debater_key}"
+                cb = _speech_start_callbacks.get(cb_key)
+                if cb and sse_bridge._loop:
+                    sse_bridge._loop.call_soon_threadsafe(cb)
+
             sse_bridge.push(debate_id, SSESpeechChunk(
                 debate_id=debate_id,
                 debater=debater_key,
@@ -69,6 +139,98 @@ def _install_stream_hook(llm: LLM, debate_id: str, debater_key: str) -> None:
         )
 
     llm._emit_stream_chunk_event = MethodType(patched_emit, llm)
+
+    # Also install the thinking-mode hook (intercepts reasoning_content from
+    # DeepSeek streaming response at the OpenAI-client level).
+    _install_thinking_interceptor(llm, debate_id, debater_key)
+
+
+# ── Thinking-mode interceptor ──────────────────────────────────────────────
+
+_think_patched = False
+
+
+def _install_thinking_interceptor(llm: LLM, debate_id: str, debater_key: str) -> None:
+    """Globally patch OpenAI client streaming to capture reasoning_content.
+
+    DeepSeek-v4-pro thinking mode returns ``reasoning_content`` deltas
+    alongside ``content`` deltas in streaming chunks.  crewAI's native
+    provider ignores reasoning_content — this interceptor pushes each
+    reasoning token as an SSEThinkingChunk while letting the original
+    chunk pass through unchanged.
+
+    Uses ``_current_debater_ctx`` context variable to attribute thinking
+    chunks to the correct debater, even when multiple LLM instances exist
+    simultaneously.  The context is set by ``DebateFlow._run_agent_phase``
+    before ``execute_task`` and propagates to the worker thread via
+    ``asyncio.to_thread``.
+    """
+    global _think_patched
+
+    if _think_patched:
+        return
+    _think_patched = True
+
+    from openai.resources.chat.completions import Completions
+
+    _original_create = Completions.create
+
+    def _patched_create(self_oc, *args, **kwargs):
+        result = _original_create(self_oc, *args, **kwargs)
+        if not kwargs.get("stream", False):
+            return result
+
+        ctx = _current_debater_ctx.get(None)
+        if not ctx:
+            return result
+
+        _debate_id, _debater_key = ctx
+
+        class _ThinkingStreamWrapper:
+            """Transparent stream wrapper that pushes reasoning_content to SSE."""
+            def __init__(self, stream, debate_id, debater_key):
+                self._stream = stream
+                self._debate_id = debate_id
+                self._debater_key = debater_key
+                self._first_think = True
+
+            def __iter__(self):
+                for chunk in self._stream:
+                    try:
+                        choices = chunk.choices if hasattr(chunk, "choices") else chunk.get("choices", [])
+                        if choices:
+                            delta = choices[0].delta if hasattr(choices[0], "delta") else choices[0].get("delta", {})
+                            rc = delta.reasoning_content if hasattr(delta, "reasoning_content") else delta.get("reasoning_content", None)
+                            if rc:
+                                if self._first_think:
+                                    self._first_think = False
+                                    # Notify frontend that thinking has started.
+                                    sse_bridge.push(
+                                        self._debate_id,
+                                        SSEDebaterStatusChange(
+                                            debate_id=self._debate_id,
+                                            debater=self._debater_key,
+                                            status="thinking",
+                                        ),
+                                    )
+                                sse_bridge.push(
+                                    self._debate_id,
+                                    SSEThinkingChunk(
+                                        debate_id=self._debate_id,
+                                        debater=self._debater_key,
+                                        content=str(rc),
+                                    ),
+                                )
+                    except Exception:
+                        pass
+                    yield chunk
+
+            def __getattr__(self, name):
+                return getattr(self._stream, name)
+
+        return _ThinkingStreamWrapper(result, _debate_id, _debater_key)
+
+    Completions.create = _patched_create
 
 
 def _make_step_callback(debate_id: str, debater_key: str):
@@ -254,7 +416,10 @@ def create_agent(
         skill_name: optional huashu-nuwa skill name.
         llm: the LLM instance.
     """
-    backstory = build_backstory_with_skill(role_info["backstory"], skill_name)
+    # Always apply caveman as default output rule, then layer optional skill
+    backstory = build_backstory_with_skill(role_info["backstory"], "caveman-perspective")
+    if skill_name:
+        backstory = build_backstory_with_skill(backstory, skill_name)
 
     agent = Agent(
         role=role_info["role"],

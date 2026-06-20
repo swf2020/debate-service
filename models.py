@@ -187,6 +187,18 @@ class SSEStateSnapshot(BaseModel):
     paused: bool
 
 
+class SSEDebaterStatusChange(BaseModel):
+    """Pushed on per-debater status transition (thinking/speaking).
+
+    Lightweight event that the frontend uses to update a single
+    debater's badge without receiving a full state_snapshot.
+    """
+    type: Literal["debater_status_change"] = "debater_status_change"
+    debate_id: str
+    debater: str
+    status: str  # "thinking" | "speaking"
+
+
 class SSEError(BaseModel):
     type: Literal["error"] = "error"
     debate_id: str

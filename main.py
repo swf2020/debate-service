@@ -6,9 +6,8 @@ Routes for debate lifecycle, SSE streaming, and static file serving.
 
 from __future__ import annotations
 
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+from dotenv import load_dotenv
+load_dotenv(override=True)
 
 import asyncio
 import json
@@ -456,8 +455,8 @@ async def admin_all_debates(admin: dict = Depends(get_admin_user)):
 
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page():
-    """Serve the admin panel page."""
+async def admin_page(admin: dict = Depends(get_admin_user)):
+    """Serve the admin panel page. Admin only."""
     admin_path = os.path.join(static_dir, "admin.html")
     if os.path.exists(admin_path):
         with open(admin_path, "r", encoding="utf-8") as f:

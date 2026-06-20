@@ -35,6 +35,10 @@ from agents import (
     create_con_agent,
     create_judge_agent,
     PHASE_CONTEXT,
+    set_current_thinking_debater,
+    reset_current_thinking_debater,
+    register_first_speech_callback,
+    unregister_first_speech_callback,
 )
 from db import insert_speech, set_verdict
 
@@ -137,12 +141,26 @@ class DebateFlow(Flow[DebateState]):
         """
         await self._check_pause()
 
+        # Clear any stale "thinking" or "speaking" status from other debaters.
+        for key in self.state.debater_status:
+            if self.state.debater_status[key] in ("thinking", "speaking"):
+                self.state.debater_status[key] = "done"
         self.state.current_debater = debater_key
-        self.state.debater_status[debater_key] = "speaking"
+        self.state.debater_status[debater_key] = "thinking"
+        self.state.current_phase = phase
+
+        self._push_phase_start(phase, debater_key, self.state.current_round)
         self._push_state_snapshot()
 
-        self.state.current_phase = phase
-        self._push_phase_start(phase, debater_key, self.state.current_round)
+        # Register a callback that fires when the first speech chunk arrives
+        # (via the LLM streaming hook).  The callback updates state to
+        # "speaking" and pushes a snapshot so the frontend sees the transition.
+        def _on_first_speech():
+            if self.state.debater_status.get(debater_key) == "thinking":
+                self.state.debater_status[debater_key] = "speaking"
+                self._push_state_snapshot()
+
+        register_first_speech_callback(self.debate_id, debater_key, _on_first_speech)
 
         # Build task description with full context
         task_description = PHASE_CONTEXT.get(phase, "")
@@ -165,6 +183,16 @@ class DebateFlow(Flow[DebateState]):
             agent=agent,
         )
 
+        # Transition to "speaking" before the LLM call.  If the streaming
+        # hook fires the first-speech callback first (racing with this),
+        # the guard above ensures it's idempotent.
+        self.state.debater_status[debater_key] = "speaking"
+        self._push_state_snapshot()
+
+        # Set the thinking-interceptor context so that reasoning_content
+        # tokens are attributed to THIS debater, not another one whose LLM
+        # happens to be the last-registered in a global dict.
+        think_token = set_current_thinking_debater(self.debate_id, debater_key)
         try:
             result = await asyncio.to_thread(agent.execute_task, task)
             output = str(result) if result else ""
@@ -177,9 +205,15 @@ class DebateFlow(Flow[DebateState]):
                 ),
             )
             output = f"[错误] {debater_key} 发言失败"
+        finally:
+            reset_current_thinking_debater(think_token)
+            unregister_first_speech_callback(self.debate_id, debater_key)
 
         # Speech chunks are streamed in real-time by the LLM streaming hook
         # installed in agents._install_stream_hook — no post-hoc chunking needed.
+        # Yield to the event loop so queued speech chunks are consumed by the
+        # SSE client before we push phase_end / state_snapshot("done").
+        await asyncio.sleep(0)
 
         self._push_phase_end(phase, debater_key)
 
