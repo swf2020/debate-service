@@ -13,6 +13,7 @@
     min-height: 100vh;
     line-height: 1.6;
   }
+  .hidden { display: none !important; }
   .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
 
   /* ── Header ── */
@@ -149,15 +150,61 @@
   /* ── Debate Grid ── */
   #debate-grid {
     display: none;
-    gap: 16px;
+    flex-direction: column;
+    gap: 20px;
     margin-bottom: 20px;
   }
-  #debate-grid.visible { display: grid; }
+  #debate-grid.visible { display: flex; }
   .grid-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
   }
+
+  /* ── Debate Modules ── */
+  .debate-module {
+    border: 1px solid #2a2a4a;
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 0.4s ease, box-shadow 0.4s ease;
+  }
+  .debate-module.active-module {
+    border-color: #bb86fc;
+    box-shadow: 0 0 16px rgba(187,134,252,0.12);
+  }
+  .module-header {
+    background: #1a1a2e;
+    padding: 8px 16px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #aaa;
+    letter-spacing: 2px;
+    border-bottom: 1px solid #2a2a4a;
+  }
+  .active-module .module-header {
+    color: #bb86fc;
+  }
+  .module-header-icon {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+    text-align: center;
+    border-radius: 50%;
+    background: #2a2a4a;
+    color: #888;
+    font-size: 0.7rem;
+    margin-right: 6px;
+    font-weight: 700;
+  }
+  .active-module .module-header-icon {
+    background: #bb86fc;
+    color: #1a1a2e;
+  }
+  .module-body {
+    padding: 12px;
+  }
+  /* #module-free-debate visible by default like other modules */
 
   .debater-cell {
     background: #16213e;
@@ -203,13 +250,19 @@
     background: #2a2a4a;
     color: #888;
   }
-  .status-badge.active-badge {
+  .status-badge.thinking {
+    background: #ffd54f;
+    color: #1a1a2e;
+    font-weight: 600;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  .status-badge.speaking {
     background: #4fc3f7;
     color: #1a1a2e;
     font-weight: 600;
     animation: pulse 1.5s ease-in-out infinite;
   }
-  .status-badge.done-badge {
+  .status-badge.done {
     background: #2e7d32;
     color: #a5d6a7;
   }
@@ -218,10 +271,8 @@
     50% { opacity: 0.6; }
   }
 
-  .cell-content { flex: 1; min-height: 60px; }
-  .cell-content details {
-    margin-bottom: 8px;
-  }
+  .cell-content { flex: 1; min-height: 180px; display: flex; flex-direction: column; }
+  .cell-content details { margin-bottom: 8px; flex-shrink: 0; }
   .cell-content details summary {
     cursor: pointer;
     color: #888;
@@ -249,15 +300,50 @@
     padding: 8px 10px;
     background: #1a1a2e;
     border-radius: 6px;
-    min-height: 40px;
+    min-height: 120px;
+    max-height: 200px;
+    overflow-y: auto;
     white-space: pre-wrap;
     word-break: break-word;
     line-height: 1.6;
+    flex: 1;
   }
   .speech-content:empty::before {
     content: "等待发言...";
     color: #555;
     font-style: italic;
+  }
+
+  /* ── Fullscreen Button ── */
+  .fullscreen-btn {
+    background: transparent;
+    border: 1px solid #3a3a5a;
+    border-radius: 4px;
+    color: #888;
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 2px 8px;
+    line-height: 1;
+    transition: color 0.2s, border-color 0.2s;
+    flex-shrink: 0;
+  }
+  .fullscreen-btn:hover { color: #e2e2e2; border-color: #888; }
+
+  /* ── Fullscreen Overlay ── */
+  .debater-cell.fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    border-radius: 0;
+    padding: 24px 32px;
+    margin: 0;
+  }
+  .debater-cell.fullscreen .cell-content { min-height: 0; }
+  .debater-cell.fullscreen .thinking-content { max-height: 40vh; font-size: 0.85rem; }
+  .debater-cell.fullscreen .speech-content {
+    max-height: none;
+    flex: 1;
+    font-size: 0.95rem;
   }
 
   /* ── Verdict Section ── */
@@ -431,6 +517,80 @@
   .phase-dot.done { background: #2e7d32; }
   .phase-dot.active { background: #bb86fc; box-shadow: 0 0 8px #bb86fc; }
 
+  /* ── Free Debate Panel ── */
+  #free-debate-panel {
+    display: none;
+    background: #1a1a2e;
+    border: 2px solid #4fc3f7;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  #free-debate-panel.visible { display: block; }
+  .free-header {
+    text-align: center;
+    color: #4fc3f7;
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+    letter-spacing: 2px;
+  }
+  .free-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .free-pro-section {
+    border-right: 1px solid #3a3a5a;
+    padding-right: 16px;
+  }
+  .free-con-section {
+    padding-left: 16px;
+  }
+  .free-section-title {
+    font-size: 0.85rem;
+    color: #aaa;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .free-round-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 10px;
+    background: #4fc3f7;
+    color: #1a1a2e;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 8px;
+  }
+  .free-speech-entry {
+    margin-bottom: 16px;
+    border-bottom: 1px dashed #2a2a4a;
+    padding-bottom: 12px;
+  }
+  .free-speech-entry:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+  .free-speech-debater {
+    font-size: 0.8rem;
+    color: #888;
+    margin-bottom: 4px;
+    font-weight: 500;
+  }
+  .free-speech {
+    color: #e2e2e2;
+    font-size: 0.85rem;
+    padding: 10px;
+    background: #16213e;
+    border-radius: 6px;
+    min-height: 48px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+  }
+
   /* ── Error Toast ── */
   #error-toast {
     display: none;
@@ -450,6 +610,107 @@
   }
   #error-toast.visible { display: block; }
 
+  /* ── Toast notifications (history, delete, etc.) ── */
+  .toast {
+    padding: 10px 20px;
+    margin: 4px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    color: #fff;
+    animation: toast-in 0.2s ease;
+  }
+  .toast.success { background: #2e7d32; }
+  .toast.error { background: #c62828; }
+  .toast.exiting { opacity: 0; transition: opacity 0.3s; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ── History List ── */
+  #history-panel {
+    display: block;
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  #history-panel.hidden { display: none; }
+  #history-panel h2 {
+    font-size: 1.1rem;
+    color: #bb86fc;
+    margin-bottom: 16px;
+    letter-spacing: 1px;
+  }
+  .history-section-title {
+    font-size: 0.85rem;
+    color: #888;
+    margin: 16px 0 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #2a2a4a;
+  }
+  .history-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    transition: border-color 0.2s;
+  }
+  .history-item:hover { border-color: #3a3a5a; }
+  .history-item-meta { flex: 1; min-width: 0; }
+  .history-item-topic {
+    font-weight: 600;
+    color: #e2e2e2;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .history-item-info {
+    font-size: 0.78rem;
+    color: #888;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .history-status {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-weight: 500;
+  }
+  .history-status.running { background: #4fc3f7; color: #1a1a2e; }
+  .history-status.paused { background: #ffd54f; color: #1a1a2e; }
+  .history-status.finished { background: #2e7d32; color: #a5d6a7; }
+  .history-item-action button {
+    padding: 6px 16px;
+    border: 1px solid #bb86fc;
+    border-radius: 6px;
+    background: transparent;
+    color: #bb86fc;
+    cursor: pointer;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    transition: background 0.2s;
+  }
+  .history-item-action button:hover { background: rgba(187,134,252,0.1); }
+  .history-item-action .delete-debate-btn {
+    border-color: #cf6679;
+    color: #cf6679;
+    margin-left: 8px;
+  }
+  .history-item-action .delete-debate-btn:hover {
+    background: rgba(207,102,121,0.12);
+  }
+  .history-empty {
+    text-align: center;
+    color: #666;
+    padding: 24px;
+    font-size: 0.9rem;
+  }
+
   /* ── Responsive ── */
   @media (max-width: 768px) {
     .grid-row { grid-template-columns: 1fr; }
@@ -461,14 +722,94 @@
     .container { padding: 12px; }
     #config-panel { padding: 16px; }
   }
+
+  /* ── Auth Panel ── */
+  #auth-panel {
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    padding: 32px;
+    max-width: 400px;
+    margin: 0 auto;
+    text-align: center;
+  }
+  #auth-panel.hidden { display: none; }
+  .auth-tabs { display: flex; margin-bottom: 20px; }
+  .auth-tab {
+    flex: 1; padding: 10px; cursor: pointer;
+    background: #1a1a2e; border: 1px solid #2a2a4a; color: #888;
+    font-size: 0.95rem;
+  }
+  .auth-tab:first-child { border-radius: 8px 0 0 8px; }
+  .auth-tab:last-child { border-radius: 0 8px 8px 0; }
+  .auth-tab.active { background: #bb86fc; color: #1a1a2e; border-color: #bb86fc; }
+  .auth-form { display: flex; flex-direction: column; gap: 12px; }
+  .auth-form.hidden { display: none; }
+  .auth-form input {
+    padding: 12px; border-radius: 8px; border: 1px solid #2a2a4a;
+    background: #1a1a2e; color: #e2e2e2; font-size: 0.95rem;
+  }
+  .auth-form button {
+    padding: 12px; border-radius: 8px; border: none;
+    background: #bb86fc; color: #1a1a2e; font-size: 1rem; font-weight: 600;
+    cursor: pointer;
+  }
+  .auth-error { color: #cf6679; font-size: 0.85rem; min-height: 20px; }
+  .auth-success { color: #03dac6; font-size: 0.85rem; min-height: 20px; }
+
+  /* ── User Bar ── */
+  #user-bar {
+    display: flex; justify-content: flex-end; align-items: center;
+    gap: 12px; padding: 8px 0; margin-bottom: 12px;
+    border-bottom: 1px solid #2a2a4a;
+  }
+  #user-bar.hidden { display: none; }
+  #user-bar .username { color: #bb86fc; font-weight: 600; }
+  #user-bar .admin-link { color: #03dac6; text-decoration: none; font-size: 0.85rem; }
+  #user-bar button {
+    padding: 4px 12px; border-radius: 6px; border: 1px solid #2a2a4a;
+    background: transparent; color: #888; cursor: pointer; font-size: 0.85rem;
+  }
+  #main-content.hidden { display: none; }
 </style>
 </head>
 <body>
   <div class="container">
 
+    <!-- Auth Panel (shown when not logged in) -->
+    <div id="auth-panel">
+      <div class="auth-tabs">
+        <div class="auth-tab active" data-tab="login">登录</div>
+        <div class="auth-tab" data-tab="register">注册</div>
+      </div>
+      <form id="login-form" class="auth-form" onsubmit="return false;">
+        <input type="text" id="login-username" placeholder="用户名" required autocomplete="username" name="login-username">
+        <input type="password" id="login-password" placeholder="密码" required autocomplete="current-password" name="login-password">
+        <button type="button" id="login-submit-btn">登录</button>
+        <div class="auth-error" id="login-error"></div>
+      </form>
+      <form id="register-form" class="auth-form hidden" onsubmit="return false;">
+        <input type="text" id="register-username" placeholder="用户名 (2-50字符)" required minlength="2" maxlength="50" autocomplete="username" name="register-username">
+        <input type="password" id="register-password" placeholder="密码 (至少4字符)" required minlength="4" maxlength="128" autocomplete="new-password" name="register-password">
+        <button type="button" id="register-submit-btn">注册</button>
+        <div class="auth-error" id="register-error"></div>
+        <div class="auth-success" id="register-success"></div>
+      </form>
+    </div>
+
+    <!-- User Bar (shown when logged in) -->
+    <div id="user-bar" class="hidden">
+      <span class="username" id="current-username"></span>
+      <a class="admin-link hidden" id="admin-link" href="/admin" target="_blank">管理面板</a>
+      <button id="logout-btn">退出</button>
+    </div>
+
+    <!-- Main Content (shown when logged in) -->
+    <div id="main-content" class="hidden">
+
     <!-- Header -->
     <header>
-      <h1>AI 辩论服务</h1>
+      <h1>门头沟辩论赛</h1>
       <p>基于 CrewAI 的多智能体辩论平台</p>
     </header>
 
@@ -479,15 +820,7 @@
           <label for="topic-input">辩题</label>
           <input type="text" id="topic-input" placeholder="输入辩论主题..." maxlength="200">
         </div>
-        <div class="config-group" style="min-width:100px;">
-          <label for="rounds-select">轮次</label>
-          <select id="rounds-select">
-            <option value="1" selected>1</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-          </select>
-        </div>
-        <div class="config-group" style="min-width:120px;">
+<div class="config-group" style="min-width:120px;">
           <label for="format-select">赛制</label>
           <select id="format-select">
             <option value="cdwc" selected>新国辩 CDWC</option>
@@ -556,15 +889,25 @@
       </div>
     </div>
 
+    <!-- History Panel -->
+    <div id="history-panel">
+      <h2>辩论记录</h2>
+      <div id="active-debates-section"></div>
+      <div id="history-debates-section"></div>
+      <div id="history-empty" class="history-empty" style="display:none;">暂无辩论记录</div>
+    </div>
+
     <!-- Control Bar -->
     <div id="control-bar">
       <div class="control-info">
         <span>赛制: <span class="info-value" id="format-info">-</span></span>
+        <span>轮数: <span class="info-value" id="round-info">-</span></span>
         <span>阶段: <span class="info-value" id="phase-info">-</span></span>
       </div>
       <div class="control-buttons">
         <button class="ctrl-btn" id="pause-btn" disabled>暂停</button>
         <button class="ctrl-btn" id="resume-btn" disabled>继续</button>
+        <button class="ctrl-btn" id="back-list-btn" style="display:none; border-color: #888; color: #888;">返回列表</button>
         <button class="ctrl-btn" id="new-debate-btn" style="display:none; border-color: #bb86fc; color: #bb86fc;">新辩论</button>
       </div>
     </div>
@@ -572,150 +915,437 @@
     <!-- Phase Progress -->
     <div id="phase-progress"></div>
 
-    <!-- Debate Grid -->
+    <!-- Debate Grid — 4 modules: 立论 / 申论与质询 / 自由辩论 / 总结陈词 -->
     <div id="debate-grid">
-      <div class="grid-row">
-        <div class="debater-cell pro-cell" data-debater="pro_1" id="cell-pro_1">
-          <div class="cell-header">
-            <div>
-              <div class="cell-debater-name">正方一辩</div>
-              <div class="cell-role">开篇立论</div>
+
+      <!-- ===== Module 1: 立论 ===== -->
+      <div class="debate-module" id="module-opening">
+        <div class="module-header"><span class="module-header-icon">一</span> 立论环节</div>
+        <div class="module-body grid-row">
+          <!-- pro_1:pro_opening -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_1:pro_opening" id="rolebox-pro_1:pro_opening">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方一辩</div>
+                <div class="cell-role">开篇立论</div>
+              </div>
+              <span class="status-badge" id="status-pro_1:pro_opening">等待</span>
             </div>
-            <span class="status-badge" id="status-pro_1">等待</span>
-          </div>
-          <div class="cell-content">
-            <details id="details-pro_1">
-              <summary>思考过程</summary>
-              <div class="thinking-content" id="thinking-pro_1"></div>
-            </details>
-            <div class="speech-content" id="speech-pro_1"></div>
-          </div>
-        </div>
-        <div class="debater-cell con-cell" data-debater="con_1" id="cell-con_1">
-          <div class="cell-header">
-            <div>
-              <div class="cell-debater-name">反方一辩</div>
-              <div class="cell-role">开篇立论</div>
+            <div class="cell-content">
+              <details id="details-pro_1:pro_opening">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_1:pro_opening"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_1:pro_opening"></div>
             </div>
-            <span class="status-badge" id="status-con_1">等待</span>
           </div>
-          <div class="cell-content">
-            <details id="details-con_1">
-              <summary>思考过程</summary>
-              <div class="thinking-content" id="thinking-con_1"></div>
-            </details>
-            <div class="speech-content" id="speech-con_1"></div>
+          <!-- con_1:con_opening -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_1:con_opening" id="rolebox-con_1:con_opening">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方一辩</div>
+                <div class="cell-role">开篇立论</div>
+              </div>
+              <span class="status-badge" id="status-con_1:con_opening">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-con_1:con_opening">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_1:con_opening"></div>
+              </details>
+              <div class="speech-content" id="speech-con_1:con_opening"></div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="grid-row">
-        <div class="debater-cell pro-cell" data-debater="pro_2" id="cell-pro_2">
-          <div class="cell-header">
-            <div>
-              <div class="cell-debater-name">正方二辩</div>
-              <div class="cell-role">驳论 / 自由辩论</div>
+      <!-- ===== Module 2: 申论与质询 (5 rows, 10 boxes) ===== -->
+      <div class="debate-module" id="module-argument">
+        <div class="module-header"><span class="module-header-icon">二</span> 申论与质询</div>
+
+        <!-- Row 1: 申论 -->
+        <div class="module-body grid-row">
+          <!-- con_2:con_argument -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_2:con_argument" id="rolebox-con_2:con_argument">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方二辩</div>
+                <div class="cell-role">申论</div>
+              </div>
+              <span class="status-badge" id="status-con_2:con_argument">等待</span>
             </div>
-            <span class="status-badge" id="status-pro_2">等待</span>
+            <div class="cell-content">
+              <details id="details-con_2:con_argument">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_2:con_argument"></div>
+              </details>
+              <div class="speech-content" id="speech-con_2:con_argument"></div>
+            </div>
           </div>
-          <div class="cell-content">
-            <details id="details-pro_2">
-              <summary>思考过程</summary>
-              <div class="thinking-content" id="thinking-pro_2"></div>
-            </details>
-            <div class="speech-content" id="speech-pro_2"></div>
+          <!-- pro_2:pro_argument -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_2:pro_argument" id="rolebox-pro_2:pro_argument">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方二辩</div>
+                <div class="cell-role">申论</div>
+              </div>
+              <span class="status-badge" id="status-pro_2:pro_argument">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-pro_2:pro_argument">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_2:pro_argument"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_2:pro_argument"></div>
+            </div>
           </div>
         </div>
-        <div class="debater-cell con-cell" data-debater="con_2" id="cell-con_2">
-          <div class="cell-header">
-            <div>
-              <div class="cell-debater-name">反方二辩</div>
-              <div class="cell-role">驳论 / 自由辩论</div>
+
+        <!-- Row 2: 正方质询 + 反方二辩应答 -->
+        <div class="module-body grid-row">
+          <!-- pro_3:pro_cross_examine -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_3:pro_cross_examine" id="rolebox-pro_3:pro_cross_examine">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方三辩</div>
+                <div class="cell-role">质询方</div>
+              </div>
+              <span class="status-badge" id="status-pro_3:pro_cross_examine">等待</span>
             </div>
-            <span class="status-badge" id="status-con_2">等待</span>
+            <div class="cell-content">
+              <details id="details-pro_3:pro_cross_examine">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_3:pro_cross_examine"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_3:pro_cross_examine"></div>
+            </div>
           </div>
-          <div class="cell-content">
-            <details id="details-con_2">
-              <summary>思考过程</summary>
-              <div class="thinking-content" id="thinking-con_2"></div>
-            </details>
-            <div class="speech-content" id="speech-con_2"></div>
+          <!-- con_2:pro_cross_examine_response -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_2:pro_cross_examine_response" id="rolebox-con_2:pro_cross_examine_response">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方二辩</div>
+                <div class="cell-role">应答</div>
+              </div>
+              <span class="status-badge" id="status-con_2:pro_cross_examine_response">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-con_2:pro_cross_examine_response">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_2:pro_cross_examine_response"></div>
+              </details>
+              <div class="speech-content" id="speech-con_2:pro_cross_examine_response"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row 3: 反方三辩应答 + 反方质询 -->
+        <div class="module-body grid-row">
+          <!-- con_3:pro_cross_examine_response -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_3:pro_cross_examine_response" id="rolebox-con_3:pro_cross_examine_response">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方三辩</div>
+                <div class="cell-role">应答</div>
+              </div>
+              <span class="status-badge" id="status-con_3:pro_cross_examine_response">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-con_3:pro_cross_examine_response">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_3:pro_cross_examine_response"></div>
+              </details>
+              <div class="speech-content" id="speech-con_3:pro_cross_examine_response"></div>
+            </div>
+          </div>
+          <!-- con_3:con_cross_examine -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_3:con_cross_examine" id="rolebox-con_3:con_cross_examine">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方三辩</div>
+                <div class="cell-role">质询方</div>
+              </div>
+              <span class="status-badge" id="status-con_3:con_cross_examine">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-con_3:con_cross_examine">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_3:con_cross_examine"></div>
+              </details>
+              <div class="speech-content" id="speech-con_3:con_cross_examine"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row 4: 正方二辩应答 + 正方三辩应答 -->
+        <div class="module-body grid-row">
+          <!-- pro_2:con_cross_examine_response -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_2:con_cross_examine_response" id="rolebox-pro_2:con_cross_examine_response">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方二辩</div>
+                <div class="cell-role">应答</div>
+              </div>
+              <span class="status-badge" id="status-pro_2:con_cross_examine_response">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-pro_2:con_cross_examine_response">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_2:con_cross_examine_response"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_2:con_cross_examine_response"></div>
+            </div>
+          </div>
+          <!-- pro_3:con_cross_examine_response -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_3:con_cross_examine_response" id="rolebox-pro_3:con_cross_examine_response">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方三辩</div>
+                <div class="cell-role">应答</div>
+              </div>
+              <span class="status-badge" id="status-pro_3:con_cross_examine_response">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-pro_3:con_cross_examine_response">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_3:con_cross_examine_response"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_3:con_cross_examine_response"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row 5: 质询小结 -->
+        <div class="module-body grid-row">
+          <!-- con_3:con_cross_summary -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_3:con_cross_summary" id="rolebox-con_3:con_cross_summary">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方三辩</div>
+                <div class="cell-role">质询小结</div>
+              </div>
+              <span class="status-badge" id="status-con_3:con_cross_summary">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-con_3:con_cross_summary">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_3:con_cross_summary"></div>
+              </details>
+              <div class="speech-content" id="speech-con_3:con_cross_summary"></div>
+            </div>
+          </div>
+          <!-- pro_3:pro_cross_summary -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_3:pro_cross_summary" id="rolebox-pro_3:pro_cross_summary">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方三辩</div>
+                <div class="cell-role">质询小结</div>
+              </div>
+              <span class="status-badge" id="status-pro_3:pro_cross_summary">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-pro_3:pro_cross_summary">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_3:pro_cross_summary"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_3:pro_cross_summary"></div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="grid-row">
-        <div class="debater-cell pro-cell" data-debater="pro_3" id="cell-pro_3">
-          <div class="cell-header">
-            <div>
-              <div class="cell-debater-name">正方三辩</div>
-              <div class="cell-role">质询与小结</div>
+      <!-- ===== Module 3: 自由辩论 (4 rows, 8 boxes) ===== -->
+      <div class="debate-module" id="module-free-debate">
+        <div class="module-header"><span class="module-header-icon">三</span> 自由辩论</div>
+        <div class="module-body grid-row">
+          <!-- pro_1:free_debate -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_1:free_debate" id="rolebox-pro_1:free_debate">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方一辩</div>
+                <div class="cell-role">自由辩论</div>
+              </div>
+              <span class="status-badge" id="status-pro_1:free_debate">等待</span>
             </div>
-            <span class="status-badge" id="status-pro_3">等待</span>
+            <div class="cell-content">
+              <details id="details-pro_1:free_debate">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_1:free_debate"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_1:free_debate"></div>
+            </div>
           </div>
-          <div class="cell-content">
-            <details id="details-pro_3">
-              <summary>思考过程</summary>
-              <div class="thinking-content" id="thinking-pro_3"></div>
-            </details>
-            <div class="speech-content" id="speech-pro_3"></div>
+          <!-- con_1:free_debate -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_1:free_debate" id="rolebox-con_1:free_debate">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方一辩</div>
+                <div class="cell-role">自由辩论</div>
+              </div>
+              <span class="status-badge" id="status-con_1:free_debate">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-con_1:free_debate">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_1:free_debate"></div>
+              </details>
+              <div class="speech-content" id="speech-con_1:free_debate"></div>
+            </div>
           </div>
         </div>
-        <div class="debater-cell con-cell" data-debater="con_3" id="cell-con_3">
-          <div class="cell-header">
-            <div>
-              <div class="cell-debater-name">反方三辩</div>
-              <div class="cell-role">质询与小结</div>
+        <div class="module-body grid-row">
+          <!-- pro_2:free_debate -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_2:free_debate" id="rolebox-pro_2:free_debate">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方二辩</div>
+                <div class="cell-role">自由辩论</div>
+              </div>
+              <span class="status-badge" id="status-pro_2:free_debate">等待</span>
             </div>
-            <span class="status-badge" id="status-con_3">等待</span>
+            <div class="cell-content">
+              <details id="details-pro_2:free_debate">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_2:free_debate"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_2:free_debate"></div>
+            </div>
           </div>
-          <div class="cell-content">
-            <details id="details-con_3">
-              <summary>思考过程</summary>
-              <div class="thinking-content" id="thinking-con_3"></div>
-            </details>
-            <div class="speech-content" id="speech-con_3"></div>
+          <!-- con_2:free_debate -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_2:free_debate" id="rolebox-con_2:free_debate">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方二辩</div>
+                <div class="cell-role">自由辩论</div>
+              </div>
+              <span class="status-badge" id="status-con_2:free_debate">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-con_2:free_debate">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_2:free_debate"></div>
+              </details>
+              <div class="speech-content" id="speech-con_2:free_debate"></div>
+            </div>
+          </div>
+        </div>
+        <div class="module-body grid-row">
+          <!-- pro_3:free_debate -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_3:free_debate" id="rolebox-pro_3:free_debate">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方三辩</div>
+                <div class="cell-role">自由辩论</div>
+              </div>
+              <span class="status-badge" id="status-pro_3:free_debate">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-pro_3:free_debate">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_3:free_debate"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_3:free_debate"></div>
+            </div>
+          </div>
+          <!-- con_3:free_debate -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_3:free_debate" id="rolebox-con_3:free_debate">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方三辩</div>
+                <div class="cell-role">自由辩论</div>
+              </div>
+              <span class="status-badge" id="status-con_3:free_debate">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-con_3:free_debate">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_3:free_debate"></div>
+              </details>
+              <div class="speech-content" id="speech-con_3:free_debate"></div>
+            </div>
+          </div>
+        </div>
+        <div class="module-body grid-row">
+          <!-- pro_4:free_debate -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_4:free_debate" id="rolebox-pro_4:free_debate">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方四辩</div>
+                <div class="cell-role">自由辩论</div>
+              </div>
+              <span class="status-badge" id="status-pro_4:free_debate">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-pro_4:free_debate">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_4:free_debate"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_4:free_debate"></div>
+            </div>
+          </div>
+          <!-- con_4:free_debate -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_4:free_debate" id="rolebox-con_4:free_debate">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方四辩</div>
+                <div class="cell-role">自由辩论</div>
+              </div>
+              <span class="status-badge" id="status-con_4:free_debate">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-con_4:free_debate">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_4:free_debate"></div>
+              </details>
+              <div class="speech-content" id="speech-con_4:free_debate"></div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="grid-row">
-        <div class="debater-cell pro-cell" data-debater="pro_4" id="cell-pro_4">
-          <div class="cell-header">
-            <div>
-              <div class="cell-debater-name">正方四辩</div>
-              <div class="cell-role">总结陈词</div>
+      <!-- ===== Module 4: 总结陈词 ===== -->
+      <div class="debate-module" id="module-closing">
+        <div class="module-header"><span class="module-header-icon">四</span> 总结陈词</div>
+        <div class="module-body grid-row">
+          <!-- con_4:con_closing -->
+          <div class="debater-cell role-box con-cell" data-role-id="con_4:con_closing" id="rolebox-con_4:con_closing">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">反方四辩</div>
+                <div class="cell-role">总结陈词</div>
+              </div>
+              <span class="status-badge" id="status-con_4:con_closing">等待</span>
             </div>
-            <span class="status-badge" id="status-pro_4">等待</span>
-          </div>
-          <div class="cell-content">
-            <details id="details-pro_4">
-              <summary>思考过程</summary>
-              <div class="thinking-content" id="thinking-pro_4"></div>
-            </details>
-            <div class="speech-content" id="speech-pro_4"></div>
-          </div>
-        </div>
-        <div class="debater-cell con-cell" data-debater="con_4" id="cell-con_4">
-          <div class="cell-header">
-            <div>
-              <div class="cell-debater-name">反方四辩</div>
-              <div class="cell-role">总结陈词</div>
+            <div class="cell-content">
+              <details id="details-con_4:con_closing">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-con_4:con_closing"></div>
+              </details>
+              <div class="speech-content" id="speech-con_4:con_closing"></div>
             </div>
-            <span class="status-badge" id="status-con_4">等待</span>
           </div>
-          <div class="cell-content">
-            <details id="details-con_4">
-              <summary>思考过程</summary>
-              <div class="thinking-content" id="thinking-con_4"></div>
-            </details>
-            <div class="speech-content" id="speech-con_4"></div>
+          <!-- pro_4:pro_closing -->
+          <div class="debater-cell role-box pro-cell" data-role-id="pro_4:pro_closing" id="rolebox-pro_4:pro_closing">
+            <div class="cell-header">
+              <div>
+                <div class="cell-debater-name">正方四辩</div>
+                <div class="cell-role">总结陈词</div>
+              </div>
+              <span class="status-badge" id="status-pro_4:pro_closing">等待</span>
+            </div>
+            <div class="cell-content">
+              <details id="details-pro_4:pro_closing">
+                <summary>思考过程</summary>
+                <div class="thinking-content" id="thinking-pro_4:pro_closing"></div>
+              </details>
+              <div class="speech-content" id="speech-pro_4:pro_closing"></div>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Cross-Examination Panel -->
+    <!-- Cross-Examination Panel (supplementary display) -->
     <div id="cross-examine-panel">
       <div class="cross-header">
         质询阶段 <span id="cross-round-badge" class="cross-round-badge"></span>
@@ -728,6 +1358,23 @@
         <div class="cross-responder-section">
           <div class="cross-section-title" id="cross-responder-label">回答方</div>
           <div id="cross-responder-speeches"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Free Debate Panel (supplementary display) -->
+    <div id="free-debate-panel">
+      <div class="free-header">
+        自由辩论 <span id="free-round-badge" class="free-round-badge"></span>
+      </div>
+      <div class="free-body">
+        <div class="free-pro-section">
+          <div class="free-section-title">正方</div>
+          <div id="free-pro-speeches"></div>
+        </div>
+        <div class="free-con-section">
+          <div class="free-section-title">反方</div>
+          <div id="free-con-speeches"></div>
         </div>
       </div>
     </div>
@@ -758,15 +1405,18 @@
 
     <!-- Error Toast -->
     <div id="error-toast"></div>
+    <div id="toast-container"></div>
 
     <!-- Footer -->
     <footer>
       Debate Service v1.0.0 &mdash; Powered by CrewAI &amp; FastAPI
     </footer>
 
-  </div>
+    </div><!-- /#main-content -->
+
+  </div><!-- /.container -->
 
   <!-- app.js loads and handles SSE logic -->
-  <script src="/static/app.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>
