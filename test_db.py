@@ -84,7 +84,7 @@ async def run_tests() -> int:
         await db.create_debate(
             id="deb-1",
             topic="AI safety",
-            total_rounds=2,
+            total_rounds=1,
             pro_skills={"debater_1": None, "debater_2": "karpathy-llm-wiki"},
             con_skills={"debater_1": "munger-perspective"},
             judge_skill="stop-slop",
@@ -95,7 +95,7 @@ async def run_tests() -> int:
         debate = await db.get_debate("deb-1")
         assert debate is not None, "get_debate returned None"
         assert debate["topic"] == "AI safety"
-        assert debate["total_rounds"] == 2
+        assert debate["total_rounds"] == 1
         assert debate["status"] == "running"
         assert debate["pro_skills"] == {"debater_1": None, "debater_2": "karpathy-llm-wiki"}
         assert debate["con_skills"] == {"debater_1": "munger-perspective"}

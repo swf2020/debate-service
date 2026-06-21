@@ -160,21 +160,19 @@ def test_sse_serialization():
 
 
 # ---------------------------------------------------------------------------
-# 4. StartDebateRequest validation (rounds in 1-3)
+# 4. StartDebateRequest validation (rounds locked to 1)
 # ---------------------------------------------------------------------------
 def test_start_request_validation():
-    # valid
-    r = StartDebateRequest(topic="test", rounds=2)
-    check("valid request rounds=2", r.rounds == 2)
-
+    # valid – only rounds=1 is accepted
     r = StartDebateRequest(topic="test", rounds=1)
     check("valid request rounds=1", r.rounds == 1)
 
-    r = StartDebateRequest(topic="test", rounds=3)
-    check("valid request rounds=3", r.rounds == 3)
+    r = StartDebateRequest(topic="test")
+    check("defaults to rounds=1", r.rounds == 1)
+
+    from pydantic import ValidationError
 
     # invalid – rounds < 1
-    from pydantic import ValidationError
     try:
         StartDebateRequest(topic="test", rounds=0)
         check("rounds=0 should fail", False)
@@ -183,14 +181,23 @@ def test_start_request_validation():
     except Exception:
         check("rounds=0 raises ValidationError (unexpected)", False)
 
-    # invalid – rounds > 3
+    # invalid – rounds=2 (locked to 1 only)
     try:
-        StartDebateRequest(topic="test", rounds=4)
-        check("rounds=4 should fail", False)
+        StartDebateRequest(topic="test", rounds=2)
+        check("rounds=2 should fail", False)
     except ValidationError:
-        check("rounds=4 raises ValidationError", True)
+        check("rounds=2 raises ValidationError", True)
     except Exception:
-        check("rounds=4 raises ValidationError (unexpected)", False)
+        check("rounds=2 raises ValidationError (unexpected)", False)
+
+    # invalid – rounds=3 (locked to 1 only)
+    try:
+        StartDebateRequest(topic="test", rounds=3)
+        check("rounds=3 should fail", False)
+    except ValidationError:
+        check("rounds=3 raises ValidationError", True)
+    except Exception:
+        check("rounds=3 raises ValidationError (unexpected)", False)
 
 
 # ---------------------------------------------------------------------------

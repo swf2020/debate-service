@@ -119,7 +119,7 @@ class TestStartDebate:
         mock_flow_cls.return_value = mock_flow
         mock_create_task.return_value = None
 
-        payload = {"topic": "人工智能是否对人类有益", "rounds": 2}
+        payload = {"topic": "人工智能是否对人类有益", "rounds": 1}
         response = client.post("/api/debate/start", json=payload, headers=auth_headers)
 
         assert response.status_code == 200
@@ -144,7 +144,7 @@ class TestStartDebate:
 
         payload = {
             "topic": "AI safety",
-            "rounds": 2,
+            "rounds": 1,
             "pro_skills": {"debater_1": "munger-perspective", "debater_2": "skill-b"},
             "con_skills": {"debater_1": "skill-c"},
             "judge_skill": "judge-perspective",
@@ -175,7 +175,7 @@ class TestGetDebate:
         mock_debate.side_effect = AsyncMock(return_value={
             "id": "deb-001",
             "topic": "test",
-            "total_rounds": 2,
+            "total_rounds": 1,
             "status": "running",
             "pro_skills": {},
             "con_skills": {},
@@ -311,8 +311,26 @@ class TestValidation:
         )
         assert response.status_code == 400
 
+    def test_invalid_rounds_two(self, client, auth_headers):
+        """rounds=2 is rejected (only 1 supported)."""
+        response = client.post(
+            "/api/debate/start",
+            json={"topic": "test", "rounds": 2},
+            headers=auth_headers,
+        )
+        assert response.status_code == 400
+
+    def test_invalid_rounds_three(self, client, auth_headers):
+        """rounds=3 is rejected (only 1 supported)."""
+        response = client.post(
+            "/api/debate/start",
+            json={"topic": "test", "rounds": 3},
+            headers=auth_headers,
+        )
+        assert response.status_code == 400
+
     def test_invalid_rounds_too_large(self, client, auth_headers):
-        """rounds=5 is rejected (max 3)."""
+        """rounds=5 is rejected (max 1)."""
         response = client.post(
             "/api/debate/start",
             json={"topic": "test", "rounds": 5},
@@ -324,7 +342,7 @@ class TestValidation:
         """Omitting topic returns 400."""
         response = client.post(
             "/api/debate/start",
-            json={"rounds": 2},
+            json={"rounds": 1},
             headers=auth_headers,
         )
         assert response.status_code == 400

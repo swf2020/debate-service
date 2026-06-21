@@ -62,12 +62,12 @@ class TestFlowDefinition(unittest.TestCase):
             "begin_debate",
             "pro_1_opening",
             "con_1_opening",
-            "pro_2_rebuttal",
-            "con_2_rebuttal",
+            "con_2_argument",
+            "pro_2_argument",
             "pro_3_cross_examine",
             "con_3_cross_examine",
-            "pro_3_summary",
             "con_3_summary",
+            "pro_3_summary",
             "free_debate",
             "con_4_closing",
             "pro_4_closing",
@@ -90,13 +90,13 @@ class TestFlowDefinition(unittest.TestCase):
         chain = [
             ("pro_1_opening", "begin_debate"),
             ("con_1_opening", "pro_1_opening"),
-            ("pro_2_rebuttal", "con_1_opening"),
-            ("con_2_rebuttal", "pro_2_rebuttal"),
-            ("pro_3_cross_examine", "con_2_rebuttal"),
+            ("con_2_argument", "con_1_opening"),
+            ("pro_2_argument", "con_2_argument"),
+            ("pro_3_cross_examine", "pro_2_argument"),
             ("con_3_cross_examine", "pro_3_cross_examine"),
-            ("pro_3_summary", "con_3_cross_examine"),
-            ("con_3_summary", "pro_3_summary"),
-            ("free_debate", "con_3_summary"),
+            ("con_3_summary", "con_3_cross_examine"),
+            ("pro_3_summary", "con_3_summary"),
+            ("free_debate", "pro_3_summary"),
             ("con_4_closing", "free_debate"),
             ("pro_4_closing", "con_4_closing"),
             ("judge_verdict", "pro_4_closing"),
@@ -218,12 +218,12 @@ class TestPhaseSequencing(unittest.TestCase):
             "begin_debate",
             "pro_1_opening",
             "con_1_opening",
-            "pro_2_rebuttal",
-            "con_2_rebuttal",
+            "con_2_argument",
+            "pro_2_argument",
             "pro_3_cross_examine",
             "con_3_cross_examine",
-            "pro_3_summary",
             "con_3_summary",
+            "pro_3_summary",
             "free_debate",
             "con_4_closing",
             "pro_4_closing",
@@ -388,9 +388,9 @@ class TestFreeDebate(unittest.TestCase):
                 mock_con.return_value = _make_mock_agent()
                 await self.flow.free_debate()
 
-            # 3 pro + 3 con = 6 speeches for 1 round
-            self.assertEqual(speak_count, 6,
-                             f"Expected 6 speeches, got {speak_count}")
+            # 4 pro + 4 con = 8 speeches for 4-round free debate
+            self.assertEqual(speak_count, 8,
+                             f"Expected 8 speeches, got {speak_count}")
             # CDWC free_debate is always single-round; current_round stays at 1
             self.assertEqual(self.flow.state.current_round, 1)
 
@@ -403,7 +403,7 @@ class TestJudgeVerdict(unittest.TestCase):
     def setUp(self):
         self.flow = DebateFlow(debate_id="test-verdict")
         self.flow.state.topic = "test topic"
-        self.flow.state.total_rounds = 2
+        self.flow.state.total_rounds = 1
         self.flow.state.debate_history = [
             {"debater": "pro_1", "phase": "pro_opening",
              "round": 1, "content": "pro opening"},
@@ -861,6 +861,164 @@ class TestThinkingInterceptorIsolation(unittest.TestCase):
         self.assertIsNone(agents._current_debater_ctx.get(None))
 
 
+class TestThinkingContextPropagation(unittest.TestCase):
+    """Verify _run_agent_phase and _cross_examine set the thinking context var
+    so the DeepSeek reasoning_content interceptor can attribute chunks."""
+
+    def setUp(self):
+        self.flow = DebateFlow(debate_id="test-think-ctx")
+        self.flow.state.topic = "test topic"
+        self.flow.state.current_round = 1
+        import agents
+        agents._think_patched = True  # skip actual OpenAI patching
+
+    def tearDown(self):
+        _active_flows.pop("test-think-ctx", None)
+        import agents
+        agents._think_patched = False
+
+    def test_run_agent_phase_sets_context_before_execute(self):
+        """_run_agent_phase must set _current_debater_ctx before
+        asyncio.to_thread(agent.execute_task) so the thinking interceptor
+        can attribute reasoning_content to the correct debater."""
+        import agents
+        agent = _make_mock_agent("test speech")
+
+        captured_ctx = None
+
+        def capture_ctx(*args, **kwargs):
+            nonlocal captured_ctx
+            captured_ctx = agents._current_debater_ctx.get(None)
+
+        agent.execute_task.side_effect = capture_ctx
+
+        async def _run():
+            with patch("debate_flow.sse_bridge"), \
+                 patch("debate_flow.insert_speech"), \
+                 patch("debate_flow.Task"):
+                await self.flow._run_agent_phase(
+                    "pro_1", "pro_opening", agent, "open"
+                )
+
+        asyncio.run(_run())
+
+        self.assertIsNotNone(
+            captured_ctx,
+            "_current_debater_ctx should be set during execute_task"
+        )
+        self.assertEqual(
+            captured_ctx,
+            ("test-think-ctx", "pro_1"),
+            f"Context should be (debate_id, debater_key), got {captured_ctx}"
+        )
+
+    def test_context_reset_after_execute(self):
+        """After _run_agent_phase completes, _current_debater_ctx must be
+        reset to None so stale context doesn't leak to next phase."""
+        import agents
+        agent = _make_mock_agent("test speech")
+
+        async def _run():
+            with patch("debate_flow.sse_bridge"), \
+                 patch("debate_flow.insert_speech"), \
+                 patch("debate_flow.Task"):
+                await self.flow._run_agent_phase(
+                    "pro_1", "pro_opening", agent, "open"
+                )
+
+        asyncio.run(_run())
+
+        ctx_after = agents._current_debater_ctx.get(None)
+        self.assertIsNone(
+            ctx_after,
+            f"_current_debater_ctx should be None after phase, got {ctx_after}"
+        )
+
+    def test_context_switches_per_debater(self):
+        """When two phases run sequentially, each must set the context to
+        its own debater_key — not leak the previous one."""
+        import agents
+        agent1 = _make_mock_agent("speech 1")
+        agent2 = _make_mock_agent("speech 2")
+
+        ctx_seen = {}
+
+        def make_capture(key):
+            def capture(*args, **kwargs):
+                ctx_seen[key] = agents._current_debater_ctx.get(None)
+            return capture
+
+        agent1.execute_task.side_effect = make_capture("pro_1")
+        agent2.execute_task.side_effect = make_capture("con_1")
+
+        async def _run():
+            with patch("debate_flow.sse_bridge"), \
+                 patch("debate_flow.insert_speech"), \
+                 patch("debate_flow.Task"):
+                await self.flow._run_agent_phase(
+                    "pro_1", "pro_opening", agent1, "open"
+                )
+                await self.flow._run_agent_phase(
+                    "con_1", "con_opening", agent2, "rebut"
+                )
+
+        asyncio.run(_run())
+
+        self.assertEqual(
+            ctx_seen.get("pro_1"),
+            ("test-think-ctx", "pro_1"),
+            f"pro_1 context wrong: {ctx_seen.get('pro_1')}"
+        )
+        self.assertEqual(
+            ctx_seen.get("con_1"),
+            ("test-think-ctx", "con_1"),
+            f"con_1 context wrong: {ctx_seen.get('con_1')}"
+        )
+
+    def test_cross_examine_sets_context_for_both_sides(self):
+        """_cross_examine must set context for examiner AND target agent,
+        each with their own debater_key."""
+        import agents
+        examiner = _make_mock_agent("question")
+        target = _make_mock_agent("answer")
+        targets = {"con_1": target}
+
+        ctx_seen = {}
+
+        def make_capture(key):
+            def capture(*args, **kwargs):
+                ctx_seen[key] = agents._current_debater_ctx.get(None)
+            return capture
+
+        examiner.execute_task.side_effect = make_capture("pro_3")
+        target.execute_task.side_effect = make_capture("con_1")
+
+        async def _run():
+            with patch("debate_flow.sse_bridge"), \
+                 patch("debate_flow.insert_speech"), \
+                 patch("debate_flow.Task"), \
+                 patch("debate_flow.update_speech_content"):
+                await self.flow._cross_examine(
+                    "pro_3", "pro_cross_examine", ["con_1"],
+                    make_examiner=lambda: examiner,
+                    make_targets={"con_1": lambda: target},
+                    context="请对反方一辩或二辩进行质询。",
+                )
+
+        asyncio.run(_run())
+
+        self.assertEqual(
+            ctx_seen.get("pro_3"),
+            ("test-think-ctx", "pro_3"),
+            f"Examiner context wrong: {ctx_seen.get('pro_3')}"
+        )
+        self.assertEqual(
+            ctx_seen.get("con_1"),
+            ("test-think-ctx", "con_1"),
+            f"Target context wrong: {ctx_seen.get('con_1')}"
+        )
+
+
 class TestPhaseOrderingStrict(unittest.TestCase):
     """Verify strict sequential debate phase ordering:
     正方1 -> 反方1 -> 正方2 -> 反方2 -> 正方3 -> 反方3 -> judge
@@ -922,14 +1080,16 @@ class TestPhaseOrderingStrict(unittest.TestCase):
         expected_chain = [
             ("pro_1_opening", "begin_debate"),
             ("con_1_opening", "pro_1_opening"),
-            ("pro_2_rebuttal", "con_1_opening"),
-            ("con_2_rebuttal", "pro_2_rebuttal"),
-            ("pro_3_argument", "con_2_rebuttal"),
-            ("con_3_argument", "pro_3_argument"),
-            ("free_debate", "con_3_argument"),
-            ("pro_3_closing", "free_debate"),
-            ("con_3_closing", "pro_3_closing"),
-            ("judge_verdict", "con_3_closing"),
+            ("con_2_argument", "con_1_opening"),
+            ("pro_2_argument", "con_2_argument"),
+            ("pro_3_cross_examine", "pro_2_argument"),
+            ("con_3_cross_examine", "pro_3_cross_examine"),
+            ("con_3_summary", "con_3_cross_examine"),
+            ("pro_3_summary", "con_3_summary"),
+            ("free_debate", "pro_3_summary"),
+            ("con_4_closing", "free_debate"),
+            ("pro_4_closing", "con_4_closing"),
+            ("judge_verdict", "pro_4_closing"),
         ]
 
         for method_name, expected_listen in expected_chain:
@@ -964,7 +1124,7 @@ class TestPhaseOrderingStrict(unittest.TestCase):
                 await self.flow._run_agent_phase(
                     "con_1", "con_opening", agent2, "rebut")
                 await self.flow._run_agent_phase(
-                    "pro_2", "pro_rebuttal", agent3, "rebut")
+                    "pro_2", "pro_argument", agent3, "rebut")
 
             # Check each snapshot has exactly 1 "speaking" debater
             for snap in snapshots:

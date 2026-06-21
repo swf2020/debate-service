@@ -34,13 +34,21 @@ from agents import (
     create_con_agent,
     create_judge_agent,
     PHASE_CONTEXT,
+    set_current_thinking_debater,
+    reset_current_thinking_debater,
+    get_and_clear_thinking,
+    register_speech_chunk_callback,
+    unregister_speech_chunk_callback,
 )
-from db import insert_speech, set_verdict
+from db import insert_speech, update_speech_content, set_verdict
 
 DB_PATH = os.environ.get("DEBATE_DB_PATH", "debate.db")
 
 # Module-level registry so main.py can locate flows for pause / resume.
 _active_flows: dict[str, "DebateFlow"] = {}
+
+# Per-debater partial speech buffer for real-time DB persistence.
+_partial_buffers: dict[str, list[str]] = {}
 
 
 class DebateFlow(Flow[DebateState]):
@@ -146,21 +154,59 @@ class DebateFlow(Flow[DebateState]):
             agent=agent,
         )
 
-        try:
-            result = await asyncio.to_thread(agent.execute_task, task)
-            output = str(result) if result else ""
-        except Exception as exc:
-            sse_bridge.push(
-                self.debate_id,
-                SSEError(
-                    debate_id=self.debate_id,
-                    message=f"{debater_key} 执行失败: {exc}",
-                ),
-            )
-            output = f"[错误] {debater_key} 发言失败"
+        # ── Real-time DB persistence setup ──
+        buffer_key = f"{self.debate_id}:{debater_key}"
+        _partial_buffers[buffer_key] = []
+        speech_id = await insert_speech(
+            debate_id=self.debate_id,
+            debater=debater_key,
+            phase=phase,
+            round_num=self.state.current_round,
+            thinking=None,
+            content="",
+            seq=self._speech_seq + 1,
+        )
+        self._speech_seq += 1
 
-        # Speech chunks are streamed in real-time by the LLM streaming hook
-        # installed in agents._install_stream_hook — no post-hoc chunking needed.
+        def on_chunk(chunk: str) -> None:
+            buf = _partial_buffers.get(buffer_key)
+            if buf is not None:
+                buf.append(chunk)
+        register_speech_chunk_callback(self.debate_id, debater_key, on_chunk)
+
+        async def flush_loop():
+            while True:
+                await asyncio.sleep(0.5)
+                buf = _partial_buffers.get(buffer_key)
+                if buf:
+                    try:
+                        await update_speech_content(speech_id, content="".join(buf))
+                    except Exception:
+                        pass
+
+        flush_task = asyncio.create_task(flush_loop())
+
+        try:
+            try:
+                token = set_current_thinking_debater(self.debate_id, debater_key)
+                try:
+                    result = await asyncio.to_thread(agent.execute_task, task)
+                    output = str(result) if result else ""
+                finally:
+                    reset_current_thinking_debater(token)
+            except Exception as exc:
+                sse_bridge.push(
+                    self.debate_id,
+                    SSEError(
+                        debate_id=self.debate_id,
+                        message=f"{debater_key} 执行失败: {exc}",
+                    ),
+                )
+                output = f"[错误] {debater_key} 发言失败"
+        finally:
+            flush_task.cancel()
+            unregister_speech_chunk_callback(self.debate_id, debater_key)
+            _partial_buffers.pop(buffer_key, None)
 
         self._push_phase_end(phase, debater_key)
 
@@ -173,7 +219,11 @@ class DebateFlow(Flow[DebateState]):
             }
         )
 
-        await self._persist_speech(debater_key, phase, None, output)
+        thinking = get_and_clear_thinking(self.debate_id, debater_key)
+        try:
+            await update_speech_content(speech_id, content=output, thinking=thinking)
+        except Exception as exc:
+            print(f"[DB] Failed to persist speech: {exc}")
         return output
 
     # ── Flow phase methods (linear chain, no or_ / cyclic routing) ──────

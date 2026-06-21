@@ -155,6 +155,7 @@ function buildHistoryItem(d, statusLabel) {
       </div>
       <div class="history-item-action">
         <button data-debate-id="${d.id}" data-debate-status="${d.status}" class="enter-debate-btn">${actionLabel}</button>
+        <button data-debate-id="${d.id}" class="delete-debate-btn">删除</button>
       </div>
     </div>`;
 }
@@ -167,6 +168,46 @@ export function bindHistoryClicks() {
     const status = btn.dataset.debateStatus;
     enterDebate(debateId, status);
   });
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.delete-debate-btn');
+    if (!btn) return;
+    const itemEl = btn.closest('.history-item');
+    deleteDebate(btn.dataset.debateId, itemEl);
+  });
+}
+
+async function deleteDebate(debateId, itemEl) {
+  if (!confirm('确定要删除这场辩论记录吗？此操作不可撤销。')) return;
+  try {
+    const resp = await fetch(`/api/debate/${debateId}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.detail || `HTTP ${resp.status}`);
+    }
+    showToast('已删除', 'success');
+
+    // Remove from DOM — try itemEl first, fall back to querySelector
+    const row = itemEl || document.querySelector(`[data-debate-id="${debateId}"].delete-debate-btn`)?.closest('.history-item');
+    if (row) {
+      const dateItemsEl = row.parentElement;
+      row.remove();
+      // Clean up empty date group
+      if (dateItemsEl && dateItemsEl.children.length === 0) {
+        const group = dateItemsEl.closest('.date-group');
+        if (group) group.remove();
+      }
+    }
+    // Update empty state
+    const itemsLeft = document.querySelectorAll('.history-item').length;
+    const emptyEl = document.getElementById('history-empty');
+    if (emptyEl) emptyEl.classList.toggle('hidden', itemsLeft > 0);
+  } catch (err) {
+    showToast('删除失败: ' + err.message, 'error');
+  }
 }
 
 export function showHistoryPanel() {

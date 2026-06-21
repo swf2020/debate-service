@@ -501,15 +501,6 @@ a:hover { color: var(--color-accent-hover); }
   background: var(--color-con-light);
 }
 
-.status-badge.finishing {
-  background: var(--color-pro-light);
-  color: var(--color-bg);
-  animation: badgePulse 1.5s ease-in-out infinite;
-}
-.con-cell .status-badge.finishing {
-  background: var(--color-con-light);
-}
-
 .status-badge.done {
   background: var(--color-success);
   color: #e2f0e4;

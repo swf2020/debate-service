@@ -78,7 +78,7 @@ class StartDebateRequest(BaseModel):
 
     topic: str
     format: str = Field(default="cdwc")
-    rounds: int = Field(default=1, ge=1, le=3)
+    rounds: int = Field(default=1, ge=1, le=1)
     pro_skills: SkillConfig = Field(default_factory=SkillConfig)
     con_skills: SkillConfig = Field(default_factory=SkillConfig)
     judge_skill: str | None = None
@@ -121,12 +121,15 @@ class SSEPhaseStart(BaseModel):
     phase: str
     debater: str
     round_num: int
+    role_id: str = ""  # "debater_key:phase" for frontend role-box routing
 
 
 class SSEThinkingChunk(BaseModel):
     type: Literal["thinking_chunk"] = "thinking_chunk"
     debate_id: str
     debater: str
+    phase: str = ""
+    role_id: str = ""  # "debater_key:phase" for frontend role-box routing
     content: str
 
 
@@ -134,6 +137,8 @@ class SSESpeechChunk(BaseModel):
     type: Literal["speech_chunk"] = "speech_chunk"
     debate_id: str
     debater: str
+    phase: str = ""
+    role_id: str = ""  # "debater_key:phase" for frontend role-box routing
     content: str
 
 
@@ -152,6 +157,7 @@ class SSECrossAChunk(BaseModel):
     responder: str
     content: str
     round: int
+    role_id: str = ""
 
 
 class SSEPhaseEnd(BaseModel):
@@ -183,9 +189,27 @@ class SSEStateSnapshot(BaseModel):
 
     type: Literal["state_snapshot"] = "state_snapshot"
     debate_id: str
+    current_round: int
+    total_rounds: int
     current_phase: str
     current_debater: str
     debater_status: dict
+    paused: bool
+    cross_examine_examiner: str = ""
+    cross_examine_target: str = ""
+
+
+class SSEDebaterStatusChange(BaseModel):
+    """Pushed on per-debater status transition (thinking/speaking).
+
+    Lightweight event that the frontend uses to update a single
+    debater's badge without receiving a full state_snapshot.
+    """
+
+    type: Literal["debater_status_change"] = "debater_status_change"
+    debate_id: str
+    debater: str
+    status: str  # "thinking" | "speaking"
 
 
 class SSEDebateEnd(BaseModel):
@@ -204,6 +228,7 @@ class SSEHistoryReplay(BaseModel):
     total_rounds: int
     current_round: int
     current_phase: str
+    current_debater: str = ""
     paused: bool
     status: str
     pro_skills: dict = Field(default_factory=dict)
@@ -217,3 +242,51 @@ class SSEError(BaseModel):
     type: Literal["error"] = "error"
     debate_id: str
     message: str
+
+
+class DebateListItem(BaseModel):
+    """Single debate row in the history list response."""
+    id: str
+    topic: str
+    status: str
+    total_rounds: int
+    winner: str | None = None
+    created_at: str
+    finished_at: str | None = None
+
+
+# ── Auth models ──────────────────────────────────────────────────────────────
+
+
+class RegisterRequest(BaseModel):
+    """Payload for user registration."""
+    username: str = Field(min_length=2, max_length=50)
+    password: str = Field(min_length=4, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    """Payload for user login."""
+    username: str
+    password: str
+
+
+class UserInfo(BaseModel):
+    """Public user info returned in auth responses."""
+    id: str
+    username: str
+    is_admin: bool
+
+
+class AuthResponse(BaseModel):
+    """Response for register/login endpoints."""
+    token: str
+    user: UserInfo
+
+
+class AdminUserItem(BaseModel):
+    """User row in admin panel list."""
+    id: str
+    username: str
+    is_admin: bool
+    debate_count: int
+    created_at: str

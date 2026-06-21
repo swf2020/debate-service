@@ -3,7 +3,7 @@
 
 import { checkAuth, logout, onAuthChange, handleLogin, handleRegister } from './auth.js';
 import { loadHistory, showHistoryPanel, bindHistoryClicks } from './history.js';
-import { startDebate, checkActiveDebate, loadSkills, pauseDebate, resumeDebate, backToList, resetToNewDebate, setBackToListCallback } from './debate.js';
+import { startDebate, checkActiveDebate, enterDebate, loadSkills, pauseDebate, resumeDebate, backToList, resetToNewDebate, setBackToListCallback, getDebateIdFromHash, isDebateHash } from './debate.js';
 import { injectFullscreenButtons, initFullscreenEscapeHandler } from './ui.js';
 
 // Wire cross-module callback: debate.js → history.js
@@ -70,9 +70,30 @@ onAuthChange(async (event) => {
   if (event.type === 'login') {
     await loadSkills();
     await loadHistory();
-    await checkActiveDebate();
 
-    // If redirected from /admin (view=admin saved in URL before checkAuth cleared it),
-    // the admin modal will open via the DOMContentLoaded path above.
+    // Hash-based routing: if URL has debate hash, enter directly
+    if (isDebateHash()) {
+      const id = getDebateIdFromHash();
+      if (id) {
+        enterDebate(id, 'finished');
+        return;
+      }
+    }
+
+    const activeDebate = await checkActiveDebate();
+    if (activeDebate) {
+      enterDebate(activeDebate.id, activeDebate.status);
+    }
+  }
+});
+
+// ── Popstate handler for browser back/forward ──
+
+window.addEventListener('popstate', () => {
+  if (isDebateHash()) {
+    const id = getDebateIdFromHash();
+    if (id) enterDebate(id, 'finished');
+  } else {
+    backToList();
   }
 });

@@ -421,8 +421,8 @@ class TestPhaseContext(unittest.TestCase):
         expected_phases = {
             "pro_opening",
             "con_opening",
-            "pro_rebuttal",
-            "con_rebuttal",
+            "pro_argument",
+            "con_argument",
             "pro_cross_examine",
             "con_cross_examine",
             "pro_cross_summary",

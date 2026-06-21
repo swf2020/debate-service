@@ -96,22 +96,7 @@ describe('debater status management', () => {
       const badge = document.getElementById('status-pro_1');
       expect(badge.textContent).toBe('发言中');
       expect(badge.classList.contains('speaking')).toBe(true);
-      expect(badge.classList.contains('finishing')).toBe(false);
       expect(badge.classList.contains('done')).toBe(false);
-    });
-
-    it('sets badge to "finishing" with "输出中" text (Bug 2 fix)', async () => {
-      const { setBadgeStatus } = await import('../ui.js');
-      const cell = buildDebaterCell('pro_1', 'pro-cell');
-      document.body.appendChild(cell);
-
-      setBadgeStatus('pro_1', 'finishing');
-      const badge = document.getElementById('status-pro_1');
-      // Bug 2 fix: "finishing" must show different text than "speaking"
-      // to avoid confusion (both used to show "发言中")
-      expect(badge.textContent).toBe('输出中');
-      expect(badge.classList.contains('finishing')).toBe(true);
-      expect(badge.classList.contains('speaking')).toBe(false);
     });
 
     it('sets badge to "done" with "已完成" text', async () => {
@@ -127,57 +112,42 @@ describe('debater status management', () => {
   });
 
   describe('updateAllStatusBadges', () => {
-    it('does NOT override a "speaking" badge (Bug 1 fix)', async () => {
+    it('allows speaking badge to be updated to done by backend (forward-only)', async () => {
       const { setBadgeStatus, updateAllStatusBadges } = await import('../ui.js');
       buildDebateGrid();
 
       // Set pro_1 as "speaking" (typewriter running, speech in progress)
       setBadgeStatus('pro_1', 'speaking');
 
-      // Backend sends state_snapshot with pro_1="done" (race condition)
-      updateAllStatusBadges({ pro_1: 'done', con_1: 'waiting', pro_2: 'waiting', con_2: 'waiting', pro_3: 'waiting', con_3: 'waiting' });
-
-      // Bug 1 fix: "speaking" badge must NOT be overwritten to "done"
-      const badge = document.getElementById('status-pro_1');
-      expect(badge.textContent).toBe('发言中');
-      expect(badge.classList.contains('speaking')).toBe(true);
-      expect(badge.classList.contains('done')).toBe(false);
-    });
-
-    it('does NOT override a "finishing" badge', async () => {
-      const { setBadgeStatus, updateAllStatusBadges } = await import('../ui.js');
-      buildDebateGrid();
-
-      // Set pro_1 as "finishing" (typewriter still rendering)
-      setBadgeStatus('pro_1', 'finishing');
-
       // Backend sends state_snapshot with pro_1="done"
       updateAllStatusBadges({ pro_1: 'done', con_1: 'waiting', pro_2: 'waiting', con_2: 'waiting', pro_3: 'waiting', con_3: 'waiting' });
 
+      // Forward-only: speaking(2) → done(3) is allowed
       const badge = document.getElementById('status-pro_1');
-      expect(badge.textContent).toBe('输出中');
-      expect(badge.classList.contains('finishing')).toBe(true);
+      expect(badge.textContent).toBe('已完成');
+      expect(badge.classList.contains('done')).toBe(true);
     });
 
-    it('updates "done" badge when state says "done"', async () => {
+    it('does NOT downgrade "done" badge to "waiting" (forward-only)', async () => {
       const { setBadgeStatus, updateAllStatusBadges } = await import('../ui.js');
       buildDebateGrid();
 
       setBadgeStatus('pro_1', 'done');
 
-      // Update with different state — should still respect "done"
+      // Update with waiting — should stay done (forward-only blocks downgrade)
       updateAllStatusBadges({ pro_1: 'waiting', con_1: 'waiting', pro_2: 'waiting', con_2: 'waiting', pro_3: 'waiting', con_3: 'waiting' });
 
       const badge = document.getElementById('status-pro_1');
-      expect(badge.textContent).toBe('等待');
+      expect(badge.textContent).toBe('已完成');
+      expect(badge.classList.contains('done')).toBe(true);
     });
 
-    it('only one badge shows "发言中" at a time (Bug 2 fix)', async () => {
+    it('only one badge shows "发言中" at a time', async () => {
       const { setBadgeStatus, updateAllStatusBadges } = await import('../ui.js');
       buildDebateGrid();
 
-      // Simulate: pro_1 finished speaking, set to "finishing", con_1 now "speaking"
-      setBadgeStatus('pro_1', 'finishing');
+      // Simulate: pro_1 done, con_1 now speaking
+      setBadgeStatus('pro_1', 'done');
       setBadgeStatus('con_1', 'speaking');
 
       // Backend sends state_snapshot for new phase
@@ -186,16 +156,14 @@ describe('debater status management', () => {
       const pro1Badge = document.getElementById('status-pro_1');
       const con1Badge = document.getElementById('status-con_1');
 
-      // pro_1 stays "finishing"/"输出中" (different from "发言中")
-      expect(pro1Badge.classList.contains('finishing')).toBe(true);
+      // pro_1 stays "done"/"已完成"
+      expect(pro1Badge.classList.contains('done')).toBe(true);
       // con_1 stays "speaking"
       expect(con1Badge.classList.contains('speaking')).toBe(true);
 
-      // Key assertion: the TEXT should be different
-      // "finishing" → "输出中", "speaking" → "发言中"
-      // This prevents the appearance of two debaters "speaking" simultaneously
+      // Only one badge shows "发言中"
       const speakingBadges = document.querySelectorAll('.status-badge.speaking');
-      expect(speakingBadges.length).toBe(1); // Only con_1 is "speaking"
+      expect(speakingBadges.length).toBe(1);
     });
   });
 });
