@@ -10,7 +10,11 @@ APP_DIR="/opt/debate-service"
 REPO="https://github.com/swf2020/debate-service.git"
 
 echo "=== Installing system packages ==="
-yum install -y python3 python3-pip git nginx
+yum install -y python3 python3-pip git nginx redis
+
+echo "=== Enabling and starting Redis ==="
+systemctl enable redis
+systemctl start redis
 
 echo "=== Cloning repo ==="
 if [ -d "$APP_DIR" ]; then
@@ -34,6 +38,8 @@ DEEPSEEK_API_KEY=sk-your-key-here
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 ADMIN_USERS=admin
 DEBATE_DB_PATH=/opt/debate-service/debate.db
+JWT_SECRET_KEY=change-me-to-a-random-secret
+REDIS_URL=redis://localhost:6379/0
 EOF
     chmod 600 /etc/default/debate-env
     echo "Created /etc/default/debate-env — edit with real key:"
