@@ -72,6 +72,7 @@ from models import (
     StartDebateResponse,
     UserInfo,
 )
+from redis_cache import get_redis
 from skill_loader import list_available_skills
 from sse_bridge import sse_bridge
 
@@ -83,10 +84,14 @@ from sse_bridge import sse_bridge
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: init DB, set event loop on SSE bridge."""
+    """Startup: init DB, Redis, set event loop on SSE bridge."""
     await init_db()
     sse_bridge.set_loop(asyncio.get_event_loop())
+    get_redis()  # Init Redis singleton (gracefully degrades if unavailable)
     yield
+    # Shutdown: close Redis connection pool
+    cache = get_redis()
+    await cache.close()
 
 
 app = FastAPI(title="Debate Service", lifespan=lifespan)
@@ -271,6 +276,15 @@ async def _run_debate(debate_id: str, flow: DebateFlow):
         )
         await update_debate_status(debate_id, "finished")
     finally:
+        # Cache speeches to Redis for fast replay
+        try:
+            speeches = await get_speeches(debate_id)
+            if speeches:
+                cache = get_redis()
+                await cache.cache_speeches(debate_id, [dict(s) for s in speeches])
+        except Exception:
+            pass  # Cache write failure is non-fatal
+
         sse_bridge.remove_debate(debate_id)
         _active_flows.pop(debate_id, None)
 
@@ -309,6 +323,11 @@ async def delete_debate(debate_id: str, current_user: dict = Depends(get_current
         sse_bridge.remove_debate(debate_id)
 
     await db_delete_debate(debate_id)
+
+    # Invalidate Redis cache
+    cache = get_redis()
+    await cache.invalidate_debate(debate_id)
+
     return {"status": "deleted"}
 
 
@@ -468,10 +487,66 @@ async def get_debate_detail(debate_id: str, current_user: dict = Depends(get_cur
     """Get debate detail with all speeches for history replay."""
     debate = await _verify_ownership_or_admin(debate_id, current_user)
 
-    speeches = await get_speeches(debate_id)
+    # Try Redis cache first
+    cache = get_redis()
+    speeches = await cache.get_speeches(debate_id)
+    if speeches is None:
+        # Cache miss — fall back to SQLite and backfill cache
+        rows = await get_speeches(debate_id)
+        speeches = [dict(r) for r in rows]
+        if speeches:
+            await cache.cache_speeches(debate_id, speeches)
+
     debate_dict = dict(debate)
-    debate_dict["speeches"] = [dict(s) for s in speeches]
+    debate_dict["speeches"] = speeches
     return debate_dict
+
+
+# ---------------------------------------------------------------------------
+# Batch speeches (preload for history page)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/debate/speeches/batch")
+async def batch_speeches(ids: str = "", current_user: dict = Depends(get_current_user)):
+    """Return speech summaries for multiple debates.
+
+    Query: ``?ids=id1,id2,id3``
+    Returns ``{speeches: {id1: [...], id2: [...]}}`` with summaries
+    (no thinking field) for each debate.  Misses are simply omitted.
+
+    Tries Redis first for each debate; falls back to SQLite for misses
+    and backfills the cache.
+    """
+    debate_ids = [did.strip() for did in ids.split(",") if did.strip()]
+    if not debate_ids:
+        return {"speeches": {}}
+
+    cache = get_redis()
+    result: dict[str, list[dict]] = {}
+
+    # Phase 1: try Redis batch
+    if cache.enabled:
+        cached = await cache.get_batch_summaries(debate_ids)
+        if cached:
+            result.update(cached)
+            # Only query SQLite for ids not in cache
+            debate_ids = [did for did in debate_ids if did not in cached]
+
+    # Phase 2: SQLite fallback for remaining (cache miss or disabled)
+    for did in debate_ids:
+        try:
+            rows = await get_speeches(did)
+            rows = [dict(r) for r in rows]
+            if rows:
+                result[did] = rows
+                # Backfill cache asynchronously
+                if cache.enabled:
+                    await cache.cache_speeches(did, rows)
+        except Exception:
+            pass  # Skip debates that fail to load
+
+    return {"speeches": result}
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 [Unit]
 Description=Debate Service
-After=network.target
+After=network.target redis.service
+Wants=redis.service
 
 [Service]
 Type=simple

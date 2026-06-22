@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>Delete Test</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; background: #1e1e1e; color: #e0e0e0; }
+  .history-item { display: flex; justify-content: space-between; padding: 12px; border: 1px solid #333; margin: 8px 0; border-radius: 6px; }
+  .delete-debate-btn { border: 1px solid #cf6679; color: #cf6679; background: transparent; padding: 6px 16px; border-radius: 4px; cursor: pointer; margin-left: 8px; }
+  .delete-debate-btn:hover { background: rgba(207,102,121,0.12); }
+  #toast-container { position: fixed; bottom: 20px; right: 20px; }
+  .toast { padding: 10px 20px; margin: 4px; border-radius: 4px; }
+  .toast.success { background: #4caf50; color: white; }
+  .toast.error { background: #cf6679; color: white; }
+</style></head>
+<body>
+
+<div id="history-panel">
+  <div id="active-debates-section"></div>
+  <div id="history-debates-section">
+    <div class="date-group expanded">
+      <div class="date-header"><span class="date-label">今天</span></div>
+      <div class="date-items" style="max-height:none;">
+        <div class="history-item">
+          <div class="history-item-meta">
+            <div class="history-item-topic">测试辩论话题 - 点击删除按钮测试</div>
+            <div class="history-item-info"><span>06-21 10:00</span><span>1轮</span></div>
+          </div>
+          <div class="history-item-action">
+            <button data-debate-id="test-delete-001" data-debate-status="finished" class="enter-debate-btn">查看回放</button>
+            <button data-debate-id="test-delete-001" class="delete-debate-btn">删除</button>
+          </div>
+        </div>
+        <div class="history-item">
+          <div class="history-item-meta">
+            <div class="history-item-topic">第二条辩论记录 - 不应被删除</div>
+            <div class="history-item-info"><span>06-21 09:00</span><span>1轮</span></div>
+          </div>
+          <div class="history-item-action">
+            <button data-debate-id="test-delete-002" data-debate-status="finished" class="enter-debate-btn">查看回放</button>
+            <button data-debate-id="test-delete-002" class="delete-debate-btn">删除</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="history-empty" class="hidden" style="text-align:center;color:#666;padding:24px;">暂无辩论记录</div>
+</div>
+
+<div id="toast-container"></div>
+
+<div style="margin-top:20px;padding:12px;background:#2a2a2a;border-radius:4px;">
+  <div id="log" style="font-family:monospace;font-size:12px;max-height:200px;overflow-y:auto;"></div>
+</div>
+
+<script type="module">
+// Minimal re-implementation of the exact same logic
+function showToast(message, type = 'error') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.innerHTML += `<div>${new Date().toISOString().slice(11,23)} ${msg}</div>`;
+}
+
+// Override fetch to mock successful delete
+const origFetch = window.fetch;
+window.fetch = function(url, options) {
+  log(`fetch: ${options?.method || 'GET'} ${url}`);
+  if (options?.method === 'DELETE') {
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({status:'deleted'}) });
+  }
+  return origFetch.apply(this, arguments);
+};
+
+// Override confirm for testing
+window.confirm = function(msg) {
+  log(`confirm: ${msg} → 自动确认`);
+  return true;
+};
+
+// The actual event delegation logic (same as history.js)
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.delete-debate-btn');
+  if (!btn) return;
+  log(`点击删除按钮: ${btn.dataset.debateId}`);
+  const itemEl = btn.closest('.history-item');
+  log(`itemEl = ${itemEl ? itemEl.querySelector('.history-item-topic').textContent : 'NULL'}`);
+  deleteDebate(btn.dataset.debateId, itemEl);
+});
+
+async function deleteDebate(debateId, itemEl) {
+  if (!confirm('确定要删除这场辩论记录吗？此操作不可撤销。')) return;
+  try {
+    const resp = await fetch(`/api/debate/${debateId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.detail || `HTTP ${resp.status}`);
+    }
+    showToast('已删除', 'success');
+    log('API 成功，删除 DOM 元素...');
+
+    const row = itemEl || document.querySelector(`[data-debate-id="${debateId}"].delete-debate-btn`)?.closest('.history-item');
+    log(`row = ${row ? row.querySelector('.history-item-topic').textContent : 'NULL'}`);
+    if (row) {
+      const dateItemsEl = row.parentElement;
+      log(`parent = .${dateItemsEl?.className}, children before = ${dateItemsEl?.children.length}`);
+      row.remove();
+      log(`children after = ${dateItemsEl?.children.length}`);
+      if (dateItemsEl && dateItemsEl.children.length === 0) {
+        const group = dateItemsEl.closest('.date-group');
+        log(`空分组, group = ${group ? 'found, removing' : 'null'}`);
+        if (group) group.remove();
+      }
+    }
+    const itemsLeft = document.querySelectorAll('.history-item').length;
+    log(`剩余 items: ${itemsLeft}`);
+    const emptyEl = document.getElementById('history-empty');
+    if (emptyEl) emptyEl.classList.toggle('hidden', itemsLeft > 0);
+  } catch (err) {
+    showToast('删除失败: ' + err.message, 'error');
+    log(`错误: ${err.message}`);
+  }
+}
+
+log('✅ 测试页面就绪 — 点击第一个删除按钮');
+</script>
+</body>
+</html>

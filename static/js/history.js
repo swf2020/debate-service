@@ -2,8 +2,9 @@
 // Date-grouped accordion rendering for debate history
 
 import { authHeaders } from './auth.js';
+import { fetchBatchSpeeches } from './api.js';
 import { setView, showToast, escapeHtml, formatTime, updateAllStatusBadges, showVerdict, getPhaseName, clearAllCells, highlightSpeaker } from './ui.js';
-import { enterDebate } from './debate.js';
+import { enterDebate, setCachedSpeeches, clearCachedSpeeches } from './debate.js';
 
 // ── Date grouping ──
 
@@ -83,8 +84,27 @@ export async function loadHistory() {
     // Empty state
     const emptyEl = document.getElementById('history-empty');
     emptyEl.classList.toggle('hidden', debates.length > 0);
+
+    // Preload finished debate speeches in background (don't block list render)
+    if (finishedDebates.length > 0) {
+      const ids = finishedDebates.map(d => d.id);
+      preloadSpeeches(ids);
+    }
   } catch (err) {
     console.error('Failed to load debate list:', err);
+  }
+}
+
+async function preloadSpeeches(ids) {
+  try {
+    const batch = await fetchBatchSpeeches(ids);
+    // Store each debate's speeches as a full debate-like object
+    // so enterDebate can use it directly via getCachedSpeeches.
+    for (const [debateId, speeches] of Object.entries(batch)) {
+      setCachedSpeeches(debateId, { speeches, total_rounds: 1 });
+    }
+  } catch (err) {
+    console.error('Failed to preload speeches:', err);
   }
 }
 
@@ -189,6 +209,9 @@ async function deleteDebate(debateId, itemEl) {
       throw new Error(data.detail || `HTTP ${resp.status}`);
     }
     showToast('已删除', 'success');
+
+    // Clear frontend speech cache
+    clearCachedSpeeches(debateId);
 
     // Remove from DOM — try itemEl first, fall back to querySelector
     const row = itemEl || document.querySelector(`[data-debate-id="${debateId}"].delete-debate-btn`)?.closest('.history-item');
