@@ -27,6 +27,19 @@ export async function postJSON(path, body) {
   return await resp.json();
 }
 
+export async function fetchBatchSpeeches(ids) {
+  if (!ids || !ids.length) return {};
+  const resp = await fetch('/api/debate/speeches/batch?ids=' + ids.join(','), {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) {
+    console.error('Failed to fetch batch speeches:', resp.status);
+    return {};
+  }
+  const data = await resp.json();
+  return data.speeches || {};
+}
+
 export function createEventSource(debateId, token, onMessage, onError) {
   const es = new EventSource(
     '/api/debate/' + debateId + '/stream?token=' + encodeURIComponent(token)

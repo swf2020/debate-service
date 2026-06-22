@@ -2,11 +2,27 @@
 // Debate lifecycle: start, SSE connection, pause/resume, state management
 
 import { authHeaders, getToken } from './auth.js';
-import { createEventSource } from './api.js';
+import { createEventSource, fetchBatchSpeeches } from './api.js';
 import { setView, showToast, clearAllCells, clearAllRoleBoxes, highlightSpeaker, setBadgeStatus, setRoleBoxStatus, updateAllStatusBadges, updateControlInfo, showVerdict, getPhaseName, escapeHtml, DEBATER_KEYS, ALL_ROLE_IDS, updateRoleLabel, highlightModule, highlightRoleBox, clearRoleBox } from './ui.js';
 // ── Callback to avoid circular dep with history.js ──
 let onBackToList = null;
 export function setBackToListCallback(fn) { onBackToList = fn; }
+
+// ── Frontend speech cache (preloaded on history page load) ──
+
+const speechCache = new Map();
+
+export function getCachedSpeeches(debateId) {
+  return speechCache.get(debateId) || null;
+}
+
+export function setCachedSpeeches(debateId, speeches) {
+  speechCache.set(debateId, speeches);
+}
+
+export function clearCachedSpeeches(debateId) {
+  speechCache.delete(debateId);
+}
 
 // ── State ──
 
@@ -134,26 +150,50 @@ export async function enterDebate(debateId, status) {
   clearAllRoleBoxes();
 
   if (status === 'finished') {
-    // Load full debate for replay
-    try {
-      const resp = await fetch('/api/debate/' + debateId, { headers: authHeaders() });
-      if (!resp.ok) throw new Error('辩论不存在或无权访问');
-      const debate = await resp.json();
+    // Try frontend memory cache first (preloaded on history page)
+    let cached = getCachedSpeeches(debateId);
+
+    if (cached) {
+      // Instant render from cache — no network request
       const roundInfo = document.getElementById('round-info');
-      if (roundInfo) roundInfo.textContent = '共 ' + debate.total_rounds + ' 轮';
+      if (roundInfo) roundInfo.textContent = '共 ' + (cached.total_rounds || 1) + ' 轮';
       const phaseInfo = document.getElementById('phase-info');
       if (phaseInfo) phaseInfo.textContent = '已完成';
       document.getElementById('pause-btn').disabled = true;
       document.getElementById('resume-btn').disabled = true;
-      restoreSpeeches(debate.speeches || []);
-      if (debate.verdict && debate.winner) {
-        showVerdict(debate.verdict, debate.winner);
+      restoreSpeeches(cached.speeches || []);
+      if (cached.verdict && cached.winner) {
+        showVerdict(cached.verdict, cached.winner);
       }
-      updateAllStatusBadges(debate.debater_status || {});
-    } catch (err) {
-      showToast('加载辩论失败: ' + err.message, 'error');
-      window.location.hash = '#/';
-      return;
+      updateAllStatusBadges(cached.debater_status || {});
+    } else {
+      // Cache miss — fetch from API, showing loading state
+      const grid = document.getElementById('debate-grid');
+      if (grid) grid.classList.add('loading');
+      try {
+        const resp = await fetch('/api/debate/' + debateId, { headers: authHeaders() });
+        if (!resp.ok) throw new Error('辩论不存在或无权访问');
+        const debate = await resp.json();
+        // Cache for next time
+        setCachedSpeeches(debateId, debate);
+        const roundInfo = document.getElementById('round-info');
+        if (roundInfo) roundInfo.textContent = '共 ' + debate.total_rounds + ' 轮';
+        const phaseInfo = document.getElementById('phase-info');
+        if (phaseInfo) phaseInfo.textContent = '已完成';
+        document.getElementById('pause-btn').disabled = true;
+        document.getElementById('resume-btn').disabled = true;
+        restoreSpeeches(debate.speeches || []);
+        if (debate.verdict && debate.winner) {
+          showVerdict(debate.verdict, debate.winner);
+        }
+        updateAllStatusBadges(debate.debater_status || {});
+      } catch (err) {
+        showToast('加载辩论失败: ' + err.message, 'error');
+        window.location.hash = '#/';
+        return;
+      } finally {
+        if (grid) grid.classList.remove('loading');
+      }
     }
   } else {
     document.getElementById('pause-btn').disabled = false;
