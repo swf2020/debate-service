@@ -42,6 +42,7 @@ from agents import (
     unregister_speech_chunk_callback,
 )
 from db import insert_speech, update_speech_content, set_verdict
+from redis_cache import get_redis
 
 DB_PATH = os.environ.get("DEBATE_DB_PATH", "debate.db")
 
@@ -878,6 +879,13 @@ class DebateFlow(Flow[DebateState]):
 
         # Persist
         await set_verdict(self.debate_id, winner, verdict)
+
+        # Cache verdict to Redis for instant replay
+        try:
+            cache = get_redis()
+            await cache.cache_verdict(self.debate_id, verdict, winner)
+        except Exception:
+            pass  # Cache write failure is non-fatal
 
         sse_bridge.push(
             self.debate_id,

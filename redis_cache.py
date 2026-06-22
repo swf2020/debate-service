@@ -164,8 +164,80 @@ class RedisCache:
             logger.warning("Redis batch read failed: %s", exc)
             return None
 
+    async def cache_verdict(
+        self, debate_id: str, verdict: dict, winner: str
+    ) -> None:
+        """Write verdict to Redis under ``debate:{id}:verdict``.
+
+        No-op when cache is disabled or verdict is empty.
+        Errors are logged but never raised.
+        """
+        if not self.enabled or not verdict:
+            return
+
+        try:
+            key = f"debate:{debate_id}:verdict"
+            payload = json.dumps(
+                {"verdict": verdict, "winner": winner},
+                ensure_ascii=False,
+            )
+            await self._redis.set(key, payload, ex=DEFAULT_TTL)  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.warning(
+                "Failed to cache verdict for %s: %s", debate_id, exc
+            )
+
+    async def get_verdict(self, debate_id: str) -> dict | None:
+        """Return cached verdict dict (``{"verdict": ..., "winner": ...}``),
+        or ``None`` on miss / error.
+        """
+        if not self.enabled:
+            return None
+
+        try:
+            raw = await self._redis.get(  # type: ignore[union-attr]
+                f"debate:{debate_id}:verdict"
+            )
+            if raw is None:
+                return None
+            return json.loads(raw)
+        except Exception as exc:
+            logger.warning("Redis read verdict failed for %s: %s", debate_id, exc)
+            return None
+
+    async def get_batch_verdicts(
+        self, debate_ids: list[str]
+    ) -> dict[str, dict] | None:
+        """Batch-fetch verdicts for multiple debates using Redis pipeline.
+
+        Returns ``{debate_id: {"verdict": ..., "winner": ...}}`` for all
+        cached debates.  Returns ``None`` when *every* key is a miss.
+        """
+        if not self.enabled or not debate_ids:
+            return None
+
+        try:
+            keys = [f"debate:{did}:verdict" for did in debate_ids]
+            pipe = self._redis.pipeline()  # type: ignore[union-attr]
+            for k in keys:
+                pipe.get(k)
+            results = await pipe.execute()
+
+            output: dict[str, dict] = {}
+            for did, raw in zip(debate_ids, results):
+                if raw is not None:
+                    output[did] = json.loads(raw)
+
+            return output if output else None
+        except Exception as exc:
+            logger.warning("Redis batch read verdicts failed: %s", exc)
+            return None
+
     async def invalidate_debate(self, debate_id: str) -> None:
-        """Delete both cached keys for a debate.  No-op / error swallowed."""
+        """Delete cached keys (speeches + summary + verdict) for a debate.
+
+        No-op / error swallowed.
+        """
         if not self.enabled:
             return
 
@@ -173,6 +245,7 @@ class RedisCache:
             await self._redis.delete(  # type: ignore[union-attr]
                 f"debate:{debate_id}:speeches",
                 f"debate:{debate_id}:summary",
+                f"debate:{debate_id}:verdict",
             )
         except Exception as exc:
             logger.warning("Redis invalidate failed for %s: %s", debate_id, exc)

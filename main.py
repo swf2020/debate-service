@@ -364,6 +364,8 @@ async def stream_debate(debate_id: str, current_user: dict = Depends(get_current
                     judge_skill=state.judge_skill,
                     debater_status=state.debater_status,
                     speeches=[dict(s) for s in speeches],
+                    verdict=state.verdict,
+                    winner=state.winner,
                 )
                 yield f"data: {replay.model_dump_json()}\n\n"
 
@@ -386,6 +388,22 @@ async def stream_debate(debate_id: str, current_user: dict = Depends(get_current
                 # Flow not in memory (server restart) but debate exists in DB
                 debate = await get_debate(debate_id)
                 if debate:
+                    # Try Redis cache first for verdict, fall back to DB
+                    cache = get_redis()
+                    verdict_data = await cache.get_verdict(debate_id)
+                    if verdict_data is None:
+                        verdict_data = {
+                            "verdict": debate.get("verdict"),
+                            "winner": debate.get("winner"),
+                        }
+                        # Backfill cache if verdict exists in DB
+                        if verdict_data["verdict"]:
+                            await cache.cache_verdict(
+                                debate_id,
+                                verdict_data["verdict"],
+                                verdict_data["winner"] or "",
+                            )
+
                     replay = SSEHistoryReplay(
                         debate_id=debate_id,
                         topic=debate.get("topic", ""),
@@ -401,6 +419,8 @@ async def stream_debate(debate_id: str, current_user: dict = Depends(get_current
                         judge_skill=debate.get("judge_skill"),
                         debater_status=debate.get("debater_status", {}),
                         speeches=[dict(s) for s in speeches],
+                        verdict=verdict_data.get("verdict"),
+                        winner=verdict_data.get("winner"),
                     )
                     yield f"data: {replay.model_dump_json()}\n\n"
 
@@ -487,7 +507,7 @@ async def get_debate_detail(debate_id: str, current_user: dict = Depends(get_cur
     """Get debate detail with all speeches for history replay."""
     debate = await _verify_ownership_or_admin(debate_id, current_user)
 
-    # Try Redis cache first
+    # Try Redis cache first for speeches
     cache = get_redis()
     speeches = await cache.get_speeches(debate_id)
     if speeches is None:
@@ -497,7 +517,19 @@ async def get_debate_detail(debate_id: str, current_user: dict = Depends(get_cur
         if speeches:
             await cache.cache_speeches(debate_id, speeches)
 
-    debate_dict = dict(debate)
+    # Try Redis cache first for verdict, fall back to DB
+    verdict_data = await cache.get_verdict(debate_id)
+    if verdict_data is None:
+        debate_dict = dict(debate)
+        verdict = debate_dict.get("verdict")
+        winner = debate_dict.get("winner")
+        if verdict:
+            await cache.cache_verdict(debate_id, verdict, winner or "")
+    else:
+        debate_dict = dict(debate)
+        debate_dict["verdict"] = verdict_data.get("verdict")
+        debate_dict["winner"] = verdict_data.get("winner")
+
     debate_dict["speeches"] = speeches
     return debate_dict
 
