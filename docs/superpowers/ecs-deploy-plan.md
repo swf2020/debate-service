@@ -151,11 +151,11 @@ git push origin master
 
 ## 备选方案对比
 
-| 方案 | 延迟 | 复杂度 | 额外依赖 |
-|------|------|--------|----------|
-| **git 轮询 + systemd timer**（推荐） | ≤1 分钟 | 低 | 无 |
-| GitHub Actions SSH 部署 | 即时 | 中 | GitHub Secrets 存 SSH key |
-| Webhook 服务器 | 即时 | 中 | 需暴露公网端口 |
+| 方案                             | 延迟    | 复杂度 | 额外依赖                     |
+| ------------------------------ | ----- | --- | ------------------------ |
+| **git 轮询 + systemd timer**（推荐） | ≤1 分钟 | 低   | 无                        |
+| GitHub Actions SSH 部署          | 即时    | 中   | GitHub Secrets 存 SSH key |
+| Webhook 服务器                    | 即时    | 中   | 需暴露公网端口                  |
 
 ## 可选增强
 
@@ -170,3 +170,4 @@ git push origin master
 2. `curl http://localhost:8080/api/debate/active` — 确认 API 响应
 3. 本地 push 一个空 commit：`git commit --allow-empty -m "test deploy" && git push`
 4. 等待 1 分钟后 `sudo journalctl -u debate-deploy.service --since "1 min ago"` — 确认检测到变化并重启
+
