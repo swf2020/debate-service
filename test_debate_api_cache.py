@@ -85,13 +85,26 @@ class TestBatchEndpoint:
         token = _register(client)
         resp = client.get("/api/debate/speeches/batch?ids=", headers=_auth(token))
         assert resp.status_code == 200
-        assert resp.json() == {"speeches": {}}
+        assert resp.json() == {"speeches": {}, "verdicts": {}}
 
     def test_no_ids_param(self, client):
         token = _register(client)
         resp = client.get("/api/debate/speeches/batch", headers=_auth(token))
         assert resp.status_code == 200
-        assert resp.json() == {"speeches": {}}
+        assert resp.json() == {"speeches": {}, "verdicts": {}}
+
+    def test_response_includes_verdicts_key(self, client):
+        """Batch endpoint returns 'verdicts' alongside 'speeches'."""
+        token = _register(client)
+        resp = client.get(
+            "/api/debate/speeches/batch?ids=some-id",
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "speeches" in data
+        assert "verdicts" in data
+        assert isinstance(data["verdicts"], dict)
 
 
 # ── Tests: Debate detail ────────────────────────────────────────────────────
@@ -157,6 +170,7 @@ class TestRedisIntegration:
             "d1": [{"debater": "pro_1", "content": "Hi"}],
             "d2": [{"debater": "con_1", "content": "No"}],
         })
+        mock_cache.get_batch_verdicts = AsyncMock(return_value=None)
 
         token = _register(client)
         with patch("main.get_redis", return_value=mock_cache):
@@ -168,11 +182,38 @@ class TestRedisIntegration:
         assert "d2" in data["speeches"]
         assert data["speeches"]["d1"][0]["content"] == "Hi"
 
+    def test_batch_endpoint_includes_verdicts_from_redis(self, client):
+        """Batch endpoint returns verdicts when Redis has them cached."""
+        mock_cache = MagicMock()
+        mock_cache.enabled = True
+        mock_cache.get_batch_summaries = AsyncMock(return_value={
+            "d1": [{"debater": "pro_1", "content": "Hi"}],
+        })
+        mock_cache.get_batch_verdicts = AsyncMock(return_value={
+            "d1": {"verdict": {"winner": "pro", "summary": "win"}, "winner": "pro"},
+        })
+
+        token = _register(client)
+        with patch("main.get_redis", return_value=mock_cache):
+            resp = client.get(
+                "/api/debate/speeches/batch?ids=d1",
+                headers=_auth(token),
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "speeches" in data
+        assert "verdicts" in data
+        assert "d1" in data["verdicts"]
+        assert data["verdicts"]["d1"]["winner"] == "pro"
+        assert data["verdicts"]["d1"]["verdict"]["winner"] == "pro"
+
     def test_batch_endpoint_falls_back_to_sqlite(self, client):
         """When Redis misses all, batch endpoint falls back to SQLite."""
         mock_cache = MagicMock()
         mock_cache.enabled = True
         mock_cache.get_batch_summaries = AsyncMock(return_value=None)
+        mock_cache.get_batch_verdicts = AsyncMock(return_value=None)
 
         token = _register(client)
         debate_id = _create(client, token)

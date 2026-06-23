@@ -4,6 +4,138 @@
 import { authHeaders, getToken } from './auth.js';
 import { createEventSource, fetchBatchSpeeches } from './api.js';
 import { setView, showToast, clearAllCells, clearAllRoleBoxes, highlightSpeaker, setBadgeStatus, setRoleBoxStatus, updateAllStatusBadges, updateControlInfo, showVerdict, getPhaseName, escapeHtml, DEBATER_KEYS, ALL_ROLE_IDS, updateRoleLabel, highlightModule, highlightRoleBox, clearRoleBox } from './ui.js';
+
+// ── Network heartbeat / auto-pause ──
+
+let heartbeatTimer = null;
+let heartbeatFailures = 0;
+let autoPaused = false;
+let pingInFlight = false;
+let lastRecoveryToast = -10000; // negative ensures first toast always fires
+const HEARTBEAT_NORMAL = 5000;
+const HEARTBEAT_FAST = 2000;
+const MAX_FAILURES = 3;
+const FETCH_TIMEOUT = 5000;
+const RECOVERY_DEBOUNCE = 3000;
+let heartbeatIntervalMs = HEARTBEAT_NORMAL;
+
+function fetchWithTimeout(url, options, timeoutMs = FETCH_TIMEOUT) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+async function heartbeatPing() {
+  if (pingInFlight) return;
+  pingInFlight = true;
+  try {
+    const resp = await fetchWithTimeout('/api/debate/active', { headers: authHeaders() });
+    if (resp.ok) {
+      if (heartbeatFailures > 0 || autoPaused) {
+        heartbeatFailures = 0;
+        if (autoPaused) {
+          onNetworkRecovered();
+        }
+      }
+      heartbeatFailures = 0;
+    } else {
+      heartbeatFailures++;
+    }
+  } catch {
+    heartbeatFailures++;
+  }
+
+  if (heartbeatFailures >= MAX_FAILURES && !autoPaused && currentDebateId) {
+    onNetworkLost();
+  }
+  pingInFlight = false;
+  scheduleHeartbeat();
+}
+
+function scheduleHeartbeat() {
+  if (heartbeatTimer) clearTimeout(heartbeatTimer);
+  heartbeatTimer = setTimeout(heartbeatPing, heartbeatIntervalMs);
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatFailures = 0;
+  autoPaused = false;
+  heartbeatIntervalMs = HEARTBEAT_NORMAL;
+  scheduleHeartbeat();
+  // Browser online/offline events for instant detection
+  window.addEventListener('offline', onBrowserOffline);
+  window.addEventListener('online', onBrowserOnline);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearTimeout(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  heartbeatFailures = 0;
+  autoPaused = false;
+  pingInFlight = false;
+  window.removeEventListener('offline', onBrowserOffline);
+  window.removeEventListener('online', onBrowserOnline);
+}
+
+function accelerateHeartbeat() {
+  heartbeatIntervalMs = HEARTBEAT_FAST;
+  if (heartbeatTimer) {
+    clearTimeout(heartbeatTimer);
+    scheduleHeartbeat();
+  }
+}
+
+function onBrowserOffline() {
+  if (currentDebateId && !autoPaused) {
+    // Trigger immediate check — heartbeatPing will fail with timeout in 5s
+    heartbeatIntervalMs = HEARTBEAT_FAST;
+    heartbeatFailures = Math.max(heartbeatFailures, 1); // count this as 1 failure already
+    if (heartbeatTimer) { clearTimeout(heartbeatTimer); scheduleHeartbeat(); }
+  }
+}
+
+function onBrowserOnline() {
+  if (autoPaused) {
+    // Immediately try to ping to confirm recovery
+    heartbeatPing();
+  }
+}
+
+async function onNetworkLost() {
+  autoPaused = true;
+  showToast('网络中断，辩论已自动暂停', 'warning');
+  // Update buttons immediately — don't wait for pause API (network is down)
+  const pauseBtn = document.getElementById('pause-btn');
+  const resumeBtn = document.getElementById('resume-btn');
+  if (pauseBtn) pauseBtn.disabled = true;
+  if (resumeBtn) resumeBtn.disabled = false;
+  // Best-effort pause — may fail if network is fully down
+  try {
+    await fetchWithTimeout('/api/debate/' + currentDebateId + '/pause', {
+      method: 'POST',
+      headers: authHeaders(),
+    }, 3000);
+  } catch {
+    // Expected — network is down
+  }
+}
+
+function onNetworkRecovered() {
+  autoPaused = false;
+  heartbeatIntervalMs = HEARTBEAT_NORMAL;
+  // Debounce recovery toasts
+  const now = Date.now();
+  if (now - lastRecoveryToast > RECOVERY_DEBOUNCE) {
+    lastRecoveryToast = now;
+    showToast('网络已恢复', 'success');
+  }
+  if (currentDebateId) {
+    connectSSE(currentDebateId);
+  }
+}
 // ── Callback to avoid circular dep with history.js ──
 let onBackToList = null;
 export function setBackToListCallback(fn) { onBackToList = fn; }
@@ -131,6 +263,7 @@ export async function startDebate() {
     clearAllCells();
 
     connectSSE(currentDebateId);
+    startHeartbeat();
   } catch (err) {
     showToast('网络错误: ' + err.message, 'error');
   }
@@ -199,6 +332,7 @@ export async function enterDebate(debateId, status) {
     document.getElementById('pause-btn').disabled = false;
     document.getElementById('resume-btn').disabled = true;
     connectSSE(debateId);
+    startHeartbeat();
   }
 
   window.location.hash = '#/debate/' + debateId;
@@ -229,6 +363,7 @@ export async function resumeDebate() {
 }
 
 export function backToList() {
+  stopHeartbeat();
   if (eventSource) {
     eventSource.close();
     eventSource = null;
@@ -246,6 +381,7 @@ export function backToList() {
 }
 
 export function resetToNewDebate() {
+  stopHeartbeat();
   if (eventSource) {
     eventSource.close();
     eventSource = null;
@@ -277,7 +413,10 @@ function connectSSE(debateId) {
     debateId,
     getToken(),
     handleSSEMessage,
-    (err) => { console.error('SSE connection error:', err); }
+    (err) => {
+      console.error('SSE connection error:', err);
+      accelerateHeartbeat();
+    }
   );
 }
 
@@ -535,6 +674,7 @@ function handleSSEMessage(msg) {
       break;
 
     case 'debate_end':
+      stopHeartbeat();
       if (eventSource) {
         eventSource.close();
         eventSource = null;
@@ -662,7 +802,7 @@ function restoreFreeDebateSpeeches(speeches) {
 }
 
 // Exported for testing
-export { handleSSEMessage, renderQueues, restoreFreeDebateSpeeches, activeRoleId, currentPhase, currentCrossPhase };
+export { handleSSEMessage, renderQueues, restoreFreeDebateSpeeches, activeRoleId, currentPhase, currentCrossPhase, startHeartbeat, stopHeartbeat, heartbeatPing, fetchWithTimeout, HEARTBEAT_NORMAL, HEARTBEAT_FAST, MAX_FAILURES, FETCH_TIMEOUT };
 
 // ── URL hash routing ──
 

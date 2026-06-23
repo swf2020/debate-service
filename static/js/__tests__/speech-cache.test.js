@@ -72,4 +72,30 @@ describe('SpeechCache', () => {
     const result = getCachedSpeeches('debate-1');
     expect(result).toBe(data); // Same reference
   });
+
+  it('stores and retrieves verdict and winner in cache entry', () => {
+    const entry = {
+      speeches: [{ debater: 'pro_1', content: 'Hi' }],
+      total_rounds: 2,
+      verdict: { winner: 'pro', pro_scores: { total: 42 }, con_scores: { total: 35 }, summary: '正方胜' },
+      winner: 'pro',
+    };
+    setCachedSpeeches('test-verdict', entry);
+    const result = getCachedSpeeches('test-verdict');
+    expect(result.verdict).toBeDefined();
+    expect(result.verdict.winner).toBe('pro');
+    expect(result.winner).toBe('pro');
+    expect(result.verdict.pro_scores.total).toBe(42);
+    clearCachedSpeeches('test-verdict');
+  });
+
+  it('cache entry without verdict still works for backward compat', () => {
+    const entry = { speeches: [{ content: 'legacy' }], total_rounds: 1 };
+    setCachedSpeeches('test-legacy', entry);
+    const result = getCachedSpeeches('test-legacy');
+    expect(result.speeches).toHaveLength(1);
+    expect(result.verdict).toBeUndefined();
+    expect(result.winner).toBeUndefined();
+    clearCachedSpeeches('test-legacy');
+  });
 });

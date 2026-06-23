@@ -17,11 +17,17 @@ pytest -v
 # Run a single test file
 pytest test_debate_flow.py -v
 
+# Run Redis cache tests
+pytest test_redis_cache.py test_debate_api_cache.py -v
+
 # Run a specific test
 pytest test_agents.py -v -k "test_create_pro_agent"
 
 # Run frontend tests (vitest)
 npx vitest run
+
+# Run specific vitest test file
+npx vitest run static/js/__tests__/speech-cache.test.js
 ```
 
 ## Architecture
@@ -45,16 +51,20 @@ FastAPI POST /api/debate/start (auth required)
         DeepSeek reasoning_content deltas → SSEThinkingChunk
       → SSEBridge (thread-safe singleton) bridges threads → asyncio.Queue → SSE client
       → speech persisted to SQLite via _persist_speech()
+  → after judge_verdict: cache.cache_speeches() + cache.cache_verdict() write to Redis
+  → GET /api/debate/{id}: Redis-first (get_speeches), SQLite fallback on miss
+  → GET /api/batch-speeches: pipeline Redis batch → SQLite for remaining → backfill Redis
 ```
 
 ### Key modules
 
-- **`main.py`**: FastAPI app — lifespan (DB init + SSEBridge loop setup), routes:
+- **`main.py`**: FastAPI app — lifespan (DB init + Redis init + SSEBridge loop setup), routes:
   Auth: `/api/auth/register`, `/api/auth/login`, `/api/auth/me`
   Debate: `/api/debate/start`, `/{id}/stream`, `/{id}/pause`, `/{id}/resume`, `/{id}`
-  List: `/api/debates`, `/api/debate/active`
+  List: `/api/debates`, `/api/batch-speeches?ids=...`, `/api/debate/active`
   Admin: `/api/admin/users`, `/api/admin/debates`, `/admin`
   Skills: `GET /api/skills` lists available persona skills
+  Cache lifecycle: lifespan startup calls `get_redis()` to init singleton, shutdown calls `cache.close()`. After debate ends: `cache_speeches()` + `cache_verdict()`. On delete: `cache.invalidate_debate()`. Detail/batch endpoints: Redis-first with SQLite fallback + backfill.
   Error handlers: 400 for ValidationError/RequestValidationError/ValueError (not default 422)
   All debate + admin routes require auth via `Depends(get_current_user)`. SSE uses `?token=` query param fallback.
 - **`debate_flow.py`**: CDWC (新国辩) format — 8 debaters (4 pro + 4 con) + judge, 12 phases, single round. `DebateFlow(Flow[DebateState])` chains phases via `@start()` / `@listen`. Module-level `_active_flows: dict[str, DebateFlow]` for pause/resume. Cross-examination via `_cross_examine()`: agent factory pattern (`make_examiner`/`make_targets` callables) creates fresh agents each round to prevent crewAI internal state corruption. Each `execute_task` wrapped with `asyncio.wait_for(timeout=300)`. Background flush tasks properly awaited after cancel with `CancelledError` catch. `_check_pause()` called per-round inside the for loop. Free debate: round-robin among all 8 debaters, 4 exchanges.
@@ -65,6 +75,7 @@ FastAPI POST /api/debate/start (auth required)
 - **`models.py`**: All Pydantic models including `DebateState(FlowState)` (crewAI requires FlowState subclass, now 4v4 debaters), request/response models, SSE event models (14 types), and auth models. SSE events: `phase_start`, `thinking_chunk`, `speech_chunk`, `cross_q_chunk`, `cross_a_chunk`, `phase_end`, `verdict_chunk`, `paused`, `resumed`, `state_snapshot`, `debater_status_change`, `debate_end`, `error`, `history_replay`. All SSE models use Literal `type` fields for JSON dispatch.
 - **`db.py`**: aiosqlite with WAL mode + foreign keys. Three tables: `users` (id, username, password_hash, is_admin, created_at) and `debates` (topic, format, status, pro_skills/con_skills/judge_skill as JSON TEXT, winner, verdict as JSON TEXT, debater_status as JSON TEXT, user_id FK, timestamps) and `speeches` (debate_id FK, debater, phase, round_num, thinking, content, seq, speech_type). Auto-migration: adds `format`, `current_debater`, `debater_status`, `user_id` columns to debates; `speech_type` to speeches. Default admin account: admin/1234.
 - **`skill_loader.py`**: Scans `~/.claude/skills/*-perspective/SKILL.md`, loads persona skill content, appends to agent backstory via `build_backstory_with_skill()`.
+- **`redis_cache.py`**: Async Redis cache layer (`redis.asyncio.Redis`) with singleton via `get_redis()`. Dual-key pattern per debate: `debate:{id}:speeches` (full) + `debate:{id}:summary` (no thinking field) + `debate:{id}:verdict`. 24h TTL, allkeys-lru eviction on server side. `max_connections=10` pool. `cache_speeches()` / `get_speeches()` / `get_speeches_summary()` for speech data. `cache_verdict()` / `get_verdict()` for judge verdict. `get_batch_summaries()` / `get_batch_verdicts()` use Redis pipeline for batch reads. `invalidate_debate()` deletes all 3 keys on debate deletion. All methods gracefully degrade — errors logged, never raised, return `None` on miss so SQLite fallback kicks in. Module-level singleton created once from `REDIS_URL` env var.
 
 ### CDWC debate flow phases (debate_flow.py)
 
@@ -102,7 +113,11 @@ begin_debate → pro_1_opening → con_1_opening → pro_2_rebuttal → con_2_re
 
 ### Frontend
 
-Modular JS: `app.js` (entry + event binding), `auth.js` (login/register/logout, JWT storage), `api.js` (fetch wrappers with auth headers), `debate.js` (SSE reconnection, debate lifecycle), `history.js` (debate list), `ui.js` (4x2 grid rendering, cross-examination panel, fullscreen, typewriter), `admin.js` (user/debate management). Separate `admin.html` for admin panel. `index.html` handles both auth and debate views. Tests in `static/js/__tests__/` using vitest.
+Modular JS: `app.js` (entry + event binding), `auth.js` (login/register/logout, JWT storage), `api.js` (fetch wrappers with auth headers), `debate.js` (SSE reconnection, debate lifecycle, speech cache/preload for instant replay), `history.js` (debate list with delete), `ui.js` (4x2 grid rendering, cross-examination panel, fullscreen, typewriter), `admin.js` (user/debate management). Separate `admin.html` for admin panel. `index.html` handles both auth and debate views. Tests in `static/js/__tests__/` using vitest (14 test files: status, fullscreen, free-debate, modules, rounds-lock, url-routing, setup, history-delete, speech-cache, verdict-replay, heartbeat).
+
+### Frontend speech cache
+
+`debate.js` maintains an in-memory `speechCache` (Map of `debate_id → speeches[]`) for instant replay on SSE reconnect. After a debate ends, speeches are cached locally. On page reload or SSE reconnect, the `/api/batch-speeches` endpoint preloads all summaries in one request. The `SSEHistoryReplay` event is augmented with cached verdict data for immediate display.
 
 ### Frontend reconnection
 
@@ -118,7 +133,7 @@ Three tables: `users` (id, username, password_hash, is_admin, created_at), `deba
 
 ### ECS deployment
 
-Systemd timer + git polling in `deploy/`: `debate.service` runs the app, `debate-deploy.service` + `debate-deploy.timer` auto-deploy via `deploy.sh` (git fetch → check for new commits → pull + restart). `setup.sh` for initial setup (Python venv, systemd unit installation, log dirs).
+Systemd timer + git polling in `deploy/`: `debate.service` runs the app (with `After=network.target redis.service`, `Wants=redis.service`, reads env from `/etc/default/debate-env`), `debate-deploy.service` + `debate-deploy.timer` auto-deploy via `deploy.sh` (git fetch → check for new commits → pull + pip install + restart + health check). `setup.sh` for initial setup (Python venv, Redis install + config — bind 127.0.0.1, no persistence, allkeys-lru, maxmemory 64mb, systemd unit installation, log dirs).
 
 ### Environment
 
@@ -126,10 +141,26 @@ Systemd timer + git polling in `deploy/`: `debate.service` runs the app, `debate
 DEEPSEEK_API_KEY=sk-...
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 DEBATE_DB_PATH=debate.db
+REDIS_URL=redis://localhost:6379/0
 JWT_SECRET_KEY=<random-secret>
 JWT_EXPIRE_HOURS=24
 ADMIN_USERS=admin,user2
 ```
+
+### Redis cache layer
+
+`redis_cache.py` provides transparent caching with graceful degradation:
+- **Write**: After debate ends, `cache_speeches()` stores full speech list + lightweight summary (no `thinking` field), `cache_verdict()` stores judge verdict + winner. All keys: `debate:{id}:speeches`, `debate:{id}:summary`, `debate:{id}:verdict`. TTL 24h.
+- **Read**: `GET /api/debate/{id}` tries `get_speeches()` first, falls back to SQLite. `GET /api/batch-speeches?ids=...` does pipeline batch read → SQLite for remaining → backfills Redis.
+- **Invalidation**: `DELETE /api/debate/{id}` calls `invalidate_debate()` to delete all 3 keys.
+- **Singleton**: `get_redis()` reads `REDIS_URL` env, creates `RedisCache` once. `max_connections=10` pool.
+- **Graceful degradation**: All methods return `None` on miss/error — caller falls back to SQLite. App doesn't crash when Redis is down.
+- **ECS config**: Redis on localhost:6379, `bind 127.0.0.1`, `save ""`, `appendonly no`, `maxmemory-policy allkeys-lru`, `maxmemory 64mb`. Config applied via `deploy/setup.sh`.
+- **Dependencies**: `redis>=5.0.0`, `hiredis>=2.0.0` (for faster protocol parsing).
+
+### OpenSpec
+
+Change specs managed in `openspec/` directory: `openspec/changes/<change-name>/` with `proposal.md`, `design.md`, `tasks.md`, and spec deltas. Deprecates the old `docs/superpowers/specs/` and `docs/superpowers/plans/` paths. Config in `openspec/config.yaml`.
 
 ### Key patterns
 
@@ -145,4 +176,5 @@ ADMIN_USERS=admin,user2
 - `pysqlite3` override at top of `main.py` for chromadb compat on ECS (never remove this)
 - All auth-protected routes use `Depends(get_current_user)`; SSE uses `?token=` fallback
 - `_verify_ownership_or_admin` helper ensures users can only access their own debates (unless admin)
+- Redis cache: all public methods are no-ops when Redis unavailable — callers always check for `None` and fall back to SQLite. `get_redis()` singleton reads env once. Batch endpoints use Redis pipeline (`pipe.get(k)` → `pipe.execute()`) for O(1) round-trips, then SQLite for remaining keys, then backfill Redis
 - 使用 /opsx:apply 实施任务时，必须采用 TDD 方式：先写失败测试，再写实现代码，每完成一个 task.md 条目就提交一次。

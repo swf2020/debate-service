@@ -97,11 +97,20 @@ export async function loadHistory() {
 
 async function preloadSpeeches(ids) {
   try {
-    const batch = await fetchBatchSpeeches(ids);
+    const { speeches, verdicts } = await fetchBatchSpeeches(ids);
     // Store each debate's speeches as a full debate-like object
     // so enterDebate can use it directly via getCachedSpeeches.
-    for (const [debateId, speeches] of Object.entries(batch)) {
-      setCachedSpeeches(debateId, { speeches, total_rounds: 1 });
+    for (const [debateId, debateSpeeches] of Object.entries(speeches)) {
+      const cacheEntry = {
+        speeches: debateSpeeches,
+        total_rounds: 1,
+      };
+      const verdictData = verdicts[debateId];
+      if (verdictData) {
+        cacheEntry.verdict = verdictData.verdict;
+        cacheEntry.winner = verdictData.winner;
+      }
+      setCachedSpeeches(debateId, cacheEntry);
     }
   } catch (err) {
     console.error('Failed to preload speeches:', err);
