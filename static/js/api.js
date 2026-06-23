@@ -28,16 +28,16 @@ export async function postJSON(path, body) {
 }
 
 export async function fetchBatchSpeeches(ids) {
-  if (!ids || !ids.length) return {};
+  if (!ids || !ids.length) return { speeches: {}, verdicts: {} };
   const resp = await fetch('/api/debate/speeches/batch?ids=' + ids.join(','), {
     headers: authHeaders(),
   });
   if (!resp.ok) {
     console.error('Failed to fetch batch speeches:', resp.status);
-    return {};
+    return { speeches: {}, verdicts: {} };
   }
   const data = await resp.json();
-  return data.speeches || {};
+  return { speeches: data.speeches || {}, verdicts: data.verdicts || {} };
 }
 
 export function createEventSource(debateId, token, onMessage, onError) {

@@ -552,10 +552,11 @@ async def batch_speeches(ids: str = "", current_user: dict = Depends(get_current
     """
     debate_ids = [did.strip() for did in ids.split(",") if did.strip()]
     if not debate_ids:
-        return {"speeches": {}}
+        return {"speeches": {}, "verdicts": {}}
 
     cache = get_redis()
     result: dict[str, list[dict]] = {}
+    all_ids = list(debate_ids)  # preserve full list for verdict phase
 
     # Phase 1: try Redis batch
     if cache.enabled:
@@ -578,7 +579,32 @@ async def batch_speeches(ids: str = "", current_user: dict = Depends(get_current
         except Exception:
             pass  # Skip debates that fail to load
 
-    return {"speeches": result}
+    # ── Fetch verdicts ──
+    verdicts: dict[str, dict] = {}
+
+    # Phase V1: try Redis batch for verdicts
+    remaining_vids = list(all_ids)
+    if cache.enabled:
+        cached_verdicts = await cache.get_batch_verdicts(all_ids)
+        if cached_verdicts:
+            verdicts.update(cached_verdicts)
+            remaining_vids = [did for did in all_ids if did not in cached_verdicts]
+
+    # Phase V2: SQLite fallback for verdicts
+    for did in remaining_vids:
+        try:
+            debate = await get_debate(did)
+            if debate:
+                v = debate.get("verdict")
+                w = debate.get("winner")
+                if v:
+                    verdicts[did] = {"verdict": v, "winner": w or ""}
+                    if cache.enabled:
+                        await cache.cache_verdict(did, v, w or "")
+        except Exception:
+            pass
+
+    return {"speeches": result, "verdicts": verdicts}
 
 
 # ---------------------------------------------------------------------------
