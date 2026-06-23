@@ -332,7 +332,7 @@ class TestInvalidateDebate:
     @patch(REDIS_PATCH)
     @pytest.mark.asyncio
     async def test_invalidate_deletes_both_keys(self, MockRedis):
-        """invalidate_debate removes both full and summary keys."""
+        """invalidate_debate removes speeches, summary, and verdict keys."""
         client = _make_mock_redis_client()
         client.delete = AsyncMock(return_value=1)
         MockRedis.from_url.return_value = client
@@ -342,7 +342,7 @@ class TestInvalidateDebate:
         await cache.invalidate_debate("d1")
 
         client.delete.assert_called_once_with(
-            "debate:d1:speeches", "debate:d1:summary"
+            "debate:d1:speeches", "debate:d1:summary", "debate:d1:verdict"
         )
 
     @pytest.mark.asyncio

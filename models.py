@@ -236,6 +236,8 @@ class SSEHistoryReplay(BaseModel):
     judge_skill: str | None = None
     debater_status: dict = Field(default_factory=dict)
     speeches: list[dict] = Field(default_factory=list)
+    verdict: dict | None = None
+    winner: str | None = None
 
 
 class SSEError(BaseModel):
