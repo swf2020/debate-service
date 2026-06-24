@@ -113,13 +113,22 @@ class SSEBridge:
     # ------------------------------------------------------------------
 
     def remove_debate(self, debate_id: str) -> None:
-        """Drop all subscriber queues for *debate_id*.
+        """Drop all subscriber queues for *debate_id* and push a
+        SHUTDOWN sentinel to each queue so blocked ``queue.get()``
+        calls wake up immediately instead of timing out.
 
         Call this when a debate finishes (normally or with an error) to
-        release resources.
+        release resources and prevent CLOSE_WAIT accumulation.
         """
-        self._queues.pop(debate_id, None)
+        queues = self._queues.pop(debate_id, [])
+        if self._loop is not None:
+            for q in queues:
+                self._loop.call_soon_threadsafe(q.put_nowait, _SHUTDOWN)
 
+
+# Sentinel pushed to subscriber queues when a debate is removed.
+# The SSE generator checks for this sentinel and exits immediately.
+_SHUTDOWN = object()
 
 # Module-level singleton — import this everywhere else.
 sse_bridge: SSEBridge = SSEBridge()

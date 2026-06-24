@@ -74,7 +74,7 @@ from models import (
 )
 from redis_cache import get_redis
 from skill_loader import list_available_skills
-from sse_bridge import sse_bridge
+from sse_bridge import _SHUTDOWN, sse_bridge
 
 
 # ---------------------------------------------------------------------------
@@ -284,9 +284,13 @@ async def _run_debate(debate_id: str, flow: DebateFlow):
                 await cache.cache_speeches(debate_id, [dict(s) for s in speeches])
         except Exception:
             pass  # Cache write failure is non-fatal
-
-        sse_bridge.remove_debate(debate_id)
-        _active_flows.pop(debate_id, None)
+        finally:
+            # Nested finally: cleanup MUST run even if CancelledError
+            # interrupts the cache operation above (CancelledError is a
+            # BaseException, not Exception, so it propagates through the
+            # except Exception above).
+            sse_bridge.remove_debate(debate_id)
+            _active_flows.pop(debate_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +341,11 @@ async def delete_debate(debate_id: str, current_user: dict = Depends(get_current
 
 
 @app.get("/api/debate/{debate_id}/stream")
-async def stream_debate(debate_id: str, current_user: dict = Depends(get_current_user)):
+async def stream_debate(
+    debate_id: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     """SSE endpoint: stream debate events to the client."""
     debate = await _verify_ownership_or_admin(debate_id, current_user)
 
@@ -425,8 +433,15 @@ async def stream_debate(debate_id: str, current_user: dict = Depends(get_current
                     yield f"data: {replay.model_dump_json()}\n\n"
 
             while True:
+                # Exit promptly when client disconnects (prevents CLOSE_WAIT)
+                if await request.is_disconnected():
+                    break
+
                 try:
-                    data = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    data = await asyncio.wait_for(queue.get(), timeout=5.0)
+                    # SHUTDOWN sentinel: debate was removed, exit immediately
+                    if data is _SHUTDOWN:
+                        break
                     yield data
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
