@@ -19,8 +19,17 @@ fi
 
 echo "[$(date)] New commits detected. Deploying..."
 
+# Stash local changes before pull (e.g., debate.db on older commits, config tweaks)
+git stash push --include-untracked -m "auto-deploy-stash" 2>/dev/null || true
+
 # Pull and install deps
 git pull origin "$BRANCH"
+
+# Restore stashed changes if any
+git stash pop 2>/dev/null || {
+    echo "[$(date)] WARNING: stash pop conflict — changes preserved in stash"
+    echo "[$(date)]   Inspect: git stash list; recover: git stash pop"
+}
 source .venv/bin/activate
 pip install -r requirements.txt --quiet
 
