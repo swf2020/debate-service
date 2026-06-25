@@ -16,7 +16,7 @@ import traceback
 from contextlib import contextmanager
 
 from models import SSEPhaseStart, SSEThinkingChunk, SSESpeechChunk
-from sse_bridge import SSEBridge, sse_bridge
+from sse_bridge import _SHUTDOWN, SSEBridge, sse_bridge
 
 passed = 0
 failed = 0
@@ -303,6 +303,31 @@ def test_10_remove_debate():
         check("remove unknown debate is no-op", True)
 
 
+def test_10b_remove_debate_pushes_shutdown_sentinel():
+    """remove_debate pushes _SHUTDOWN to all subscriber queues so blocked
+    queue.get() calls wake immediately instead of timing out."""
+    bridge = SSEBridge()
+    _reset(bridge)
+    with _loop_context() as loop:
+        bridge.set_loop(loop)
+        q1 = bridge.subscribe("debate-001")
+        q2 = bridge.subscribe("debate-001")
+
+        bridge.remove_debate("debate-001")
+        _flush(loop)
+
+        # Both queues should have exactly 1 item: the SHUTDOWN sentinel
+        check("q1 has 1 item after remove", q1.qsize() == 1)
+        check("q2 has 1 item after remove", q2.qsize() == 1)
+
+        item1 = q1.get_nowait()
+        item2 = q2.get_nowait()
+        check("q1 item is _SHUTDOWN", item1 is _SHUTDOWN)
+        check("q2 item is _SHUTDOWN", item2 is _SHUTDOWN)
+
+        check("debate removed from dict", "debate-001" not in bridge._queues)
+
+
 # ------------------------------------------------------------------
 # 11. Multiple debate IDs are isolated
 # ------------------------------------------------------------------
@@ -367,6 +392,7 @@ def main():
     run_test("Push is noop unknown debate", test_8_push_noop_unknown_debate)
     run_test("Thread-safe push", test_9_thread_safe_push)
     run_test("remove_debate cleanup", test_10_remove_debate)
+    run_test("remove_debate pushes SHUTDOWN sentinel", test_10b_remove_debate_pushes_shutdown_sentinel)
     run_test("Debate isolation", test_11_debate_isolation)
     run_test("set_loop", test_12_set_loop)
 
