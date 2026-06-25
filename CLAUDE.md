@@ -18,7 +18,13 @@ pytest -v
 pytest test_debate_flow.py -v
 
 # Run Redis cache tests
-pytest test_redis_cache.py test_debate_api_cache.py -v
+pytest test_redis_cache.py test_redis_verdict_cache.py test_debate_api_cache.py -v
+
+# Run SSE bridge tests
+pytest test_sse_bridge.py -v
+
+# Run verdict replay tests
+pytest test_main_verdict_replay.py test_models_verdict_replay.py test_integration_verdict.py -v
 
 # Run a specific test
 pytest test_agents.py -v -k "test_create_pro_agent"
@@ -27,7 +33,7 @@ pytest test_agents.py -v -k "test_create_pro_agent"
 npx vitest run
 
 # Run specific vitest test file
-npx vitest run static/js/__tests__/speech-cache.test.js
+npx vitest run static/js/__tests__/heartbeat.test.js
 ```
 
 ## Architecture
@@ -51,9 +57,16 @@ FastAPI POST /api/debate/start (auth required)
         DeepSeek reasoning_content deltas → SSEThinkingChunk
       → SSEBridge (thread-safe singleton) bridges threads → asyncio.Queue → SSE client
       → speech persisted to SQLite via _persist_speech()
-  → after judge_verdict: cache.cache_speeches() + cache.cache_verdict() write to Redis
-  → GET /api/debate/{id}: Redis-first (get_speeches), SQLite fallback on miss
-  → GET /api/batch-speeches: pipeline Redis batch → SQLite for remaining → backfill Redis
+  → judge_verdict: set_verdict() writes to SQLite + cache.cache_verdict() writes to Redis
+  → after flow.kickoff_async() returns: _run_debate finally block runs:
+      → cache.cache_speeches() + cache.cache_verdict() write to Redis (nested finally
+        ensures cleanup even if CancelledError interrupts cache op)
+      → sse_bridge.remove_debate() pushes _SHUTDOWN sentinel to all subscriber queues
+        → wakes blocked q.get() calls instantly → SSE generators exit → TCP sockets close
+      → _active_flows.pop() removes flow
+  → GET /api/debate/{id}: Redis-first (get_speeches + get_verdict), SQLite fallback on miss
+  → GET /api/debate/speeches/batch: pipeline Redis batch → SQLite for remaining → backfill Redis
+    (also returns verdicts for each debate in separate `verdicts` key)
 ```
 
 ### Key modules
@@ -61,21 +74,22 @@ FastAPI POST /api/debate/start (auth required)
 - **`main.py`**: FastAPI app — lifespan (DB init + Redis init + SSEBridge loop setup), routes:
   Auth: `/api/auth/register`, `/api/auth/login`, `/api/auth/me`
   Debate: `/api/debate/start`, `/{id}/stream`, `/{id}/pause`, `/{id}/resume`, `/{id}`
-  List: `/api/debates`, `/api/batch-speeches?ids=...`, `/api/debate/active`
+  List: `/api/debates`, `/api/debate/speeches/batch?ids=...`, `/api/debate/active`
   Admin: `/api/admin/users`, `/api/admin/debates`, `/admin`
   Skills: `GET /api/skills` lists available persona skills
-  Cache lifecycle: lifespan startup calls `get_redis()` to init singleton, shutdown calls `cache.close()`. After debate ends: `cache_speeches()` + `cache_verdict()`. On delete: `cache.invalidate_debate()`. Detail/batch endpoints: Redis-first with SQLite fallback + backfill.
+  Cache lifecycle: lifespan startup calls `get_redis()` to init singleton, shutdown calls `cache.close()`. After debate ends: `cache_speeches()` + `cache_verdict()`. On delete: `cache.invalidate_debate()`. Detail/batch endpoints: Redis-first with SQLite fallback + backfill. Batch endpoint also returns `verdicts` key with per-debate verdict data.
+  SSE endpoint: imports `_SHUTDOWN` sentinel from sse_bridge. Generator checks `request.is_disconnected()` each iteration, detects `_SHUTDOWN` sentinel for instant exit (no 5s wait), uses 5s timeout for keepalive. `_run_debate` uses nested `finally` so `remove_debate()` + `_active_flows.pop()` always run even if `CancelledError` interrupts the cache write.
   Error handlers: 400 for ValidationError/RequestValidationError/ValueError (not default 422)
   All debate + admin routes require auth via `Depends(get_current_user)`. SSE uses `?token=` query param fallback.
-- **`debate_flow.py`**: CDWC (新国辩) format — 8 debaters (4 pro + 4 con) + judge, 12 phases, single round. `DebateFlow(Flow[DebateState])` chains phases via `@start()` / `@listen`. Module-level `_active_flows: dict[str, DebateFlow]` for pause/resume. Cross-examination via `_cross_examine()`: agent factory pattern (`make_examiner`/`make_targets` callables) creates fresh agents each round to prevent crewAI internal state corruption. Each `execute_task` wrapped with `asyncio.wait_for(timeout=300)`. Background flush tasks properly awaited after cancel with `CancelledError` catch. `_check_pause()` called per-round inside the for loop. Free debate: round-robin among all 8 debaters, 4 exchanges.
-- **`debate_flow_standard.py`**: Legacy standard format — 6 debaters (3 pro + 3 con) + judge. Multi-round support (rebuttal→argument internal loop). Used as fallback for `format="standard"` in main.py's start endpoint.
+- **`debate_flow.py`**: CDWC (新国辩) format — 8 debaters (4 pro + 4 con) + judge, 12 phases, single round. `DebateFlow(Flow[DebateState])` chains phases via `@start()` / `@listen`. Module-level `_active_flows: dict[str, DebateFlow]` for pause/resume. Cross-examination via `_cross_examine()`: agent factory pattern (`make_examiner`/`make_targets` callables) creates fresh agents each round to prevent crewAI internal state corruption. Each `execute_task` wrapped with `asyncio.wait_for(timeout=300)`. Background flush tasks properly awaited after cancel with `CancelledError` catch. `_check_pause()` called per-round inside the for loop. Free debate: round-robin among all 8 debaters, 4 exchanges. `judge_verdict` phase caches verdict to Redis via `cache.cache_verdict()` for instant replay.
+- **`debate_flow_standard.py`**: Legacy standard format — 6 debaters (3 pro + 3 con) + judge. Multi-round support (rebuttal→argument internal loop). Used as fallback for `format="standard"` in main.py's start endpoint. `judge_verdict` phase also caches verdict to Redis.
 - **`agents.py`**: Agent factories (`create_pro_agent`, `create_con_agent`, `create_judge_agent`) for 8 debaters + judge. `_make_llm()` creates DeepSeek-v4-pro LLM with `stream=True` and `thinking: {type: enabled}` extra_body. `_install_stream_hook` monkey-patches `LLM._emit_stream_chunk_event` per-instance, fires `_first_speech` callback on first token to trigger debater status change (thinking → speaking). `register_first_speech_callback` / `unregister_first_speech_callback` manage per-debater status tracking. `_install_thinking_interceptor` globally patches `openai.Completions.create` to capture `reasoning_content` deltas (one-shot global patch via `_think_patched` flag). Context vars (`_current_debater_ctx`, `_current_role_ctx`) propagate debater/phase identity across threads. `_thinking_buffer` with threading.Lock accumulates thinking chunks. `_make_step_callback` pushes crewAI ReAct loop thoughts. `PHASE_ROLES` dict defines 23 distinct speaking roles with per-phase goal/backstory overrides. `PRO_ROLES` / `CON_ROLES` provide base persona backstories.
 - **`auth.py`**: JWT auth with bcrypt password hashing. `create_access_token` / `decode_access_token` (HS256, 24h expiry). `get_current_user` FastAPI dependency: extracts JWT from `Authorization: Bearer` header or `?token=` query param (for SSE). `get_admin_user` dependency for admin routes. `JWT_SECRET_KEY` from env or auto-generated (warns on auto-gen).
-- **`sse_bridge.py`**: Singleton `SSEBridge` — `push()` is thread-safe (`call_soon_threadsafe`), `subscribe()`/`unsubscribe()` manage per-debate asyncio.Queues. Module-level `sse_bridge` instance used everywhere.
+- **`sse_bridge.py`**: Singleton `SSEBridge` — `push()` is thread-safe (`call_soon_threadsafe`), `subscribe()`/`unsubscribe()` manage per-debate asyncio.Queues. `remove_debate()` pushes module-level `_SHUTDOWN` sentinel to all subscriber queues before dropping them, so blocked `q.get()` calls wake immediately instead of timing out — prevents TCP CLOSE_WAIT accumulation. Module-level `sse_bridge` instance and `_SHUTDOWN` sentinel imported everywhere.
 - **`models.py`**: All Pydantic models including `DebateState(FlowState)` (crewAI requires FlowState subclass, now 4v4 debaters), request/response models, SSE event models (14 types), and auth models. SSE events: `phase_start`, `thinking_chunk`, `speech_chunk`, `cross_q_chunk`, `cross_a_chunk`, `phase_end`, `verdict_chunk`, `paused`, `resumed`, `state_snapshot`, `debater_status_change`, `debate_end`, `error`, `history_replay`. All SSE models use Literal `type` fields for JSON dispatch.
 - **`db.py`**: aiosqlite with WAL mode + foreign keys. Three tables: `users` (id, username, password_hash, is_admin, created_at) and `debates` (topic, format, status, pro_skills/con_skills/judge_skill as JSON TEXT, winner, verdict as JSON TEXT, debater_status as JSON TEXT, user_id FK, timestamps) and `speeches` (debate_id FK, debater, phase, round_num, thinking, content, seq, speech_type). Auto-migration: adds `format`, `current_debater`, `debater_status`, `user_id` columns to debates; `speech_type` to speeches. Default admin account: admin/1234.
 - **`skill_loader.py`**: Scans `~/.claude/skills/*-perspective/SKILL.md`, loads persona skill content, appends to agent backstory via `build_backstory_with_skill()`.
-- **`redis_cache.py`**: Async Redis cache layer (`redis.asyncio.Redis`) with singleton via `get_redis()`. Dual-key pattern per debate: `debate:{id}:speeches` (full) + `debate:{id}:summary` (no thinking field) + `debate:{id}:verdict`. 24h TTL, allkeys-lru eviction on server side. `max_connections=10` pool. `cache_speeches()` / `get_speeches()` / `get_speeches_summary()` for speech data. `cache_verdict()` / `get_verdict()` for judge verdict. `get_batch_summaries()` / `get_batch_verdicts()` use Redis pipeline for batch reads. `invalidate_debate()` deletes all 3 keys on debate deletion. All methods gracefully degrade — errors logged, never raised, return `None` on miss so SQLite fallback kicks in. Module-level singleton created once from `REDIS_URL` env var.
+- **`redis_cache.py`**: Async Redis cache layer (`redis.asyncio.Redis`) with singleton via `get_redis()`. Triple-key pattern per debate: `debate:{id}:speeches` (full) + `debate:{id}:summary` (no thinking field) + `debate:{id}:verdict` (judge verdict + winner). 24h TTL, allkeys-lru eviction on server side. `max_connections=10` pool. `cache_speeches()` / `get_speeches()` / `get_speeches_summary()` for speech data. `cache_verdict()` / `get_verdict()` for judge verdict. `get_batch_summaries()` / `get_batch_verdicts()` use Redis pipeline for batch reads. `invalidate_debate()` deletes all 3 keys on debate deletion. All methods gracefully degrade — errors logged, never raised, return `None` on miss so SQLite fallback kicks in. Module-level singleton created once from `REDIS_URL` env var.
 
 ### CDWC debate flow phases (debate_flow.py)
 
@@ -113,11 +127,15 @@ begin_debate → pro_1_opening → con_1_opening → pro_2_rebuttal → con_2_re
 
 ### Frontend
 
-Modular JS: `app.js` (entry + event binding), `auth.js` (login/register/logout, JWT storage), `api.js` (fetch wrappers with auth headers), `debate.js` (SSE reconnection, debate lifecycle, speech cache/preload for instant replay), `history.js` (debate list with delete), `ui.js` (4x2 grid rendering, cross-examination panel, fullscreen, typewriter), `admin.js` (user/debate management). Separate `admin.html` for admin panel. `index.html` handles both auth and debate views. Tests in `static/js/__tests__/` using vitest (14 test files: status, fullscreen, free-debate, modules, rounds-lock, url-routing, setup, history-delete, speech-cache, verdict-replay, heartbeat).
+Modular JS: `app.js` (entry + event binding), `auth.js` (login/register/logout, JWT storage), `api.js` (fetch wrappers with auth headers), `debate.js` (SSE reconnection, debate lifecycle, speech cache/preload for instant replay, network heartbeat with auto-pause on connection loss), `history.js` (debate list with delete), `ui.js` (4x2 grid rendering, cross-examination panel, fullscreen, typewriter), `admin.js` (user/debate management). Separate `admin.html` for admin panel. `index.html` handles both auth and debate views. Tests in `static/js/__tests__/` using vitest (11 files: free-debate, fullscreen, heartbeat, history-delete, modules, rounds-lock, setup, speech-cache, status, url-routing, verdict-replay).
 
 ### Frontend speech cache
 
-`debate.js` maintains an in-memory `speechCache` (Map of `debate_id → speeches[]`) for instant replay on SSE reconnect. After a debate ends, speeches are cached locally. On page reload or SSE reconnect, the `/api/batch-speeches` endpoint preloads all summaries in one request. The `SSEHistoryReplay` event is augmented with cached verdict data for immediate display.
+`debate.js` maintains an in-memory `speechCache` (Map of `debate_id → speeches[]`) for instant replay on SSE reconnect. After a debate ends, speeches are cached locally. On page reload or SSE reconnect, the `/api/debate/speeches/batch` endpoint preloads all summaries + verdicts in one request. The `SSEHistoryReplay` event is augmented with cached verdict data for immediate display.
+
+### Frontend heartbeat / auto-pause
+
+`debate.js` runs a network heartbeat polling `/api/debate/active` every 5s (normal) or 2s (accelerated). After 3 consecutive failures (timeout 5s each), the frontend auto-pauses the debate: calls `POST /api/debate/{id}/pause` and sets `autoPaused = true`. When connectivity recovers (heartbeat succeeds again), auto-resumes with `POST /api/debate/{id}/resume`. Browser `online`/`offline` events trigger immediate acceleration + failure counting for faster detection. Toast notifications debounced at 3s. Tested via `heartbeat.test.js` (478 lines).
 
 ### Frontend reconnection
 
@@ -151,7 +169,7 @@ ADMIN_USERS=admin,user2
 
 `redis_cache.py` provides transparent caching with graceful degradation:
 - **Write**: After debate ends, `cache_speeches()` stores full speech list + lightweight summary (no `thinking` field), `cache_verdict()` stores judge verdict + winner. All keys: `debate:{id}:speeches`, `debate:{id}:summary`, `debate:{id}:verdict`. TTL 24h.
-- **Read**: `GET /api/debate/{id}` tries `get_speeches()` first, falls back to SQLite. `GET /api/batch-speeches?ids=...` does pipeline batch read → SQLite for remaining → backfills Redis.
+- **Read**: `GET /api/debate/{id}` tries `get_speeches()` first, falls back to SQLite. `GET /api/debate/speeches/batch?ids=...` does pipeline batch read → SQLite for remaining → backfills Redis.
 - **Invalidation**: `DELETE /api/debate/{id}` calls `invalidate_debate()` to delete all 3 keys.
 - **Singleton**: `get_redis()` reads `REDIS_URL` env, creates `RedisCache` once. `max_connections=10` pool.
 - **Graceful degradation**: All methods return `None` on miss/error — caller falls back to SQLite. App doesn't crash when Redis is down.
@@ -177,4 +195,6 @@ Change specs managed in `openspec/` directory: `openspec/changes/<change-name>/`
 - All auth-protected routes use `Depends(get_current_user)`; SSE uses `?token=` fallback
 - `_verify_ownership_or_admin` helper ensures users can only access their own debates (unless admin)
 - Redis cache: all public methods are no-ops when Redis unavailable — callers always check for `None` and fall back to SQLite. `get_redis()` singleton reads env once. Batch endpoints use Redis pipeline (`pipe.get(k)` → `pipe.execute()`) for O(1) round-trips, then SQLite for remaining keys, then backfill Redis
+- SSE connection cleanup: `sse_bridge.remove_debate()` pushes `_SHUTDOWN` sentinel into all subscriber queues before dropping them → wakes blocked `q.get()` instantly → SSE generator exits → TCP socket closes. Prevents CLOSE_WAIT accumulation. SSE generator also checks `request.is_disconnected()` per iteration and handles `CancelledError` (Starlette cancels generator task on client disconnect — must catch in `except` so `finally` still runs `unsubscribe`).
+- `_run_debate`: nested `finally` blocks ensure `remove_debate()` + `_active_flows.pop()` always execute, even if `CancelledError` (BaseException, not Exception) interrupts the Redis cache write in the outer finally.
 - 使用 /opsx:apply 实施任务时，必须采用 TDD 方式：先写失败测试，再写实现代码，每完成一个 task.md 条目就提交一次。
