@@ -24,7 +24,7 @@ pytest test_redis_cache.py test_redis_verdict_cache.py test_debate_api_cache.py 
 pytest test_sse_bridge.py -v
 
 # Run verdict replay tests
-pytest test_main_verdict_replay.py test_models_verdict_replay.py test_integration_verdict.py -v
+pytest test_main_verdict_replay.py test_models_verdict_replay.py test_debate_flow_verdict_cache.py test_integration_verdict.py -v
 
 # Run a specific test
 pytest test_agents.py -v -k "test_create_pro_agent"
@@ -127,7 +127,7 @@ begin_debate → pro_1_opening → con_1_opening → pro_2_rebuttal → con_2_re
 
 ### Frontend
 
-Modular JS: `app.js` (entry + event binding), `auth.js` (login/register/logout, JWT storage), `api.js` (fetch wrappers with auth headers), `debate.js` (SSE reconnection, debate lifecycle, speech cache/preload for instant replay, network heartbeat with auto-pause on connection loss), `history.js` (debate list with delete), `ui.js` (4x2 grid rendering, cross-examination panel, fullscreen, typewriter), `admin.js` (user/debate management). Separate `admin.html` for admin panel. `index.html` handles both auth and debate views. Tests in `static/js/__tests__/` using vitest (11 files: free-debate, fullscreen, heartbeat, history-delete, modules, rounds-lock, setup, speech-cache, status, url-routing, verdict-replay).
+Modular JS: `app.js` (entry + event binding), `auth.js` (login/register/logout, JWT storage), `api.js` (fetch wrappers with auth headers), `debate.js` (SSE reconnection, debate lifecycle, speech cache/preload for instant replay, network heartbeat with auto-pause on connection loss), `history.js` (debate list with delete), `ui.js` (4x2 grid rendering, cross-examination panel, fullscreen, typewriter), `admin.js` (user/debate management). Separate `admin.html` for admin panel. `index.html` handles both auth and debate views. `#auth-panel` starts with `class="hidden"` to prevent login flash on refresh — `checkAuth()` async validation runs before any view is revealed. Tests in `static/js/__tests__/` using vitest (11 files: free-debate, fullscreen, heartbeat, history-delete, modules, rounds-lock, setup, speech-cache, status, url-routing, verdict-replay).
 
 ### Frontend speech cache
 
@@ -151,7 +151,7 @@ Three tables: `users` (id, username, password_hash, is_admin, created_at), `deba
 
 ### ECS deployment
 
-Systemd timer + git polling in `deploy/`: `debate.service` runs the app (with `After=network.target redis.service`, `Wants=redis.service`, reads env from `/etc/default/debate-env`), `debate-deploy.service` + `debate-deploy.timer` auto-deploy via `deploy.sh` (git fetch → check for new commits → pull + pip install + restart + health check). `setup.sh` for initial setup (Python venv, Redis install + config — bind 127.0.0.1, no persistence, allkeys-lru, maxmemory 64mb, systemd unit installation, log dirs).
+Systemd timer + git polling in `deploy/`: `debate.service` runs the app (with `After=network.target redis.service`, `Wants=redis.service`, reads env from `/etc/default/debate-env`), `debate-deploy.service` + `debate-deploy.timer` auto-deploy via `deploy.sh` (git fetch → check for new commits → `git stash push` to protect local changes → `git pull` → `git stash pop` → pip install + restart + health check). Timer fires every minute (`OnCalendar=*-*-* *:*:00`). `setup.sh` for initial setup (Python venv, Redis install + config — bind 127.0.0.1, no persistence, allkeys-lru, maxmemory 64mb, systemd unit installation, log dirs).
 
 ### Environment
 
