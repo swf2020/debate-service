@@ -71,6 +71,15 @@
     border-color: #bb86fc;
   }
   .config-group input::placeholder { color: #666; }
+  .char-counter {
+    display: block;
+    text-align: right;
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 4px;
+  }
+  .char-counter.warn { color: #ff9100; }
+  .char-counter.over { color: #ff5252; }
   .skill-group-title {
     font-size: 0.8rem;
     color: #888;
@@ -818,7 +827,8 @@
       <div class="config-row">
         <div class="config-group" style="flex:2; min-width:260px;">
           <label for="topic-input">辩题</label>
-          <input type="text" id="topic-input" placeholder="输入辩论主题..." maxlength="200">
+          <input type="text" id="topic-input" placeholder="输入辩论主题..." maxlength="2000">
+          <span id="topic-char-count" class="char-counter">0 / 2000</span>
         </div>
 <div class="config-group" style="min-width:120px;">
           <label for="format-select">赛制</label>

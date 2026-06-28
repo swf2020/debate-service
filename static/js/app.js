@@ -39,6 +39,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Topic char counter
+  const topicInput = document.getElementById('topic-input');
+  const topicCharCount = document.getElementById('topic-char-count');
+  topicInput.addEventListener('input', () => {
+    const len = topicInput.value.length;
+    const max = 2000;
+    topicCharCount.textContent = `${len} / ${max}`;
+    topicCharCount.classList.toggle('warn', len > max * 0.9 && len <= max);
+    topicCharCount.classList.toggle('over', len > max);
+  });
+
   // Debate controls
   document.getElementById('start-btn').addEventListener('click', startDebate);
   document.getElementById('pause-btn').addEventListener('click', pauseDebate);

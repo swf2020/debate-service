@@ -112,7 +112,10 @@ async def index():
     index_path = os.path.join(static_dir, "index.html")
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read())
+            return HTMLResponse(
+                content=f.read(),
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
     return HTMLResponse(content="<h1>Debate Service</h1><p>index.html not found</p>")
 
 
