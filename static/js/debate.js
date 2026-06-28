@@ -225,6 +225,10 @@ export async function startDebate() {
     showToast('请输入辩题', 'error');
     return;
   }
+  if (topic.length > 2000) {
+    showToast('辩题内容不能超过2000个字符', 'error');
+    return;
+  }
 
   const proSkills = {
     debater_1: document.getElementById('pro-skills-1').value || null,
