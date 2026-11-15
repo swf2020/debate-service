@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 
 import aiosqlite
 
@@ -76,16 +77,6 @@ async def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_speeches_debate_id
                 ON speeches(debate_id);
         """)
-        await db.commit()
-
-        # Ensure default admin account exists (admin / 1234)
-        import bcrypt as _bcrypt
-        admin_hash = _bcrypt.hashpw(b"1234", _bcrypt.gensalt()).decode("utf-8")
-        await db.execute(
-            "INSERT OR IGNORE INTO users (id, username, password_hash, is_admin)"
-            " VALUES (?, ?, ?, 1)",
-            ("admin-001", "admin", admin_hash),
-        )
         await db.commit()
 
         # ── Migrations ─────────────────────────────────────────────────────
@@ -443,6 +434,24 @@ async def delete_debate(debate_id: str) -> None:
     try:
         await db.execute("DELETE FROM speeches WHERE debate_id = ?", (debate_id,))
         await db.execute("DELETE FROM debates WHERE id = ?", (debate_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def provision_admin(username: str, password_hash: str) -> None:
+    """Create an administrator or reset credentials for an existing administrator."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO users (id, username, password_hash, is_admin)
+               VALUES (?, ?, ?, 1)
+               ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash
+               WHERE users.is_admin = 1""",
+            (str(uuid.uuid4()), username, password_hash),
+        )
+        if not cursor.rowcount:
+            raise ValueError("Username belongs to a regular user")
         await db.commit()
     finally:
         await db.close()

@@ -1,9 +1,11 @@
 """
 Integration tests for debate API with Redis cache layer.
 """
+import asyncio
 import json
 import os
 import tempfile
+from threading import Event
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +18,7 @@ _tmp_dir = tempfile.mkdtemp(prefix="debate_test_")
 TEST_DB_PATH = Path(_tmp_dir) / "test.db"
 
 os.environ["DEBATE_DB_PATH"] = str(TEST_DB_PATH)
-os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-cache-tests"
+os.environ.setdefault("JWT_SECRET_KEY", "debate-service-test-key-at-least-32-bytes")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -65,6 +67,20 @@ def client():
         yield c
 
 
+def _seed_debate(token: str, debate_id: str) -> None:
+    from auth import decode_access_token
+    from db import create_debate, insert_speech, set_verdict
+
+    async def seed():
+        await create_debate(id=debate_id, topic="Test", total_rounds=1,
+                            pro_skills={}, con_skills={}, judge_skill=None,
+                            user_id=decode_access_token(token)["sub"])
+        await insert_speech(debate_id, "pro_1", "opening", 1, "private", "Hello", 1)
+        await set_verdict(debate_id, "pro", {"winner": "pro"})
+
+    asyncio.run(seed())
+
+
 # ── Tests: Batch endpoint ───────────────────────────────────────────────────
 
 
@@ -92,6 +108,34 @@ class TestBatchEndpoint:
         resp = client.get("/api/debate/speeches/batch", headers=_auth(token))
         assert resp.status_code == 200
         assert resp.json() == {"speeches": {}, "verdicts": {}}
+
+    @pytest.mark.parametrize("cached", [False, True])
+    def test_batch_only_returns_accessible_debates(self, client, cached):
+        owner, stranger = _register(client), _register(client)
+        own_id, foreign_id = uuid.uuid4().hex, uuid.uuid4().hex
+        _seed_debate(owner, own_id)
+        _seed_debate(stranger, foreign_id)
+        cache = MagicMock(enabled=cached)
+        cache.get_batch_summaries = AsyncMock(
+            side_effect=lambda ids: {did: [{"content": "Hello"}] for did in ids}
+        )
+        cache.get_batch_verdicts = AsyncMock(
+            side_effect=lambda ids: {did: {"winner": "pro"} for did in ids}
+        )
+
+        with patch("main.get_redis", return_value=cache):
+            response = client.get("/api/debate/speeches/batch",
+                                  params={"ids": f"{own_id},{foreign_id},missing,{own_id}"},
+                                  headers=_auth(owner))
+
+        assert response.status_code == 200
+        data = response.json()
+        assert set(data["speeches"]) == {own_id}
+        assert set(data["verdicts"]) == {own_id}
+        assert "thinking" not in data["speeches"][own_id][0]
+        if cached:
+            cache.get_batch_summaries.assert_awaited_once_with([own_id])
+            cache.get_batch_verdicts.assert_awaited_once_with([own_id])
 
     def test_response_includes_verdicts_key(self, client):
         """Batch endpoint returns 'verdicts' alongside 'speeches'."""
@@ -146,6 +190,31 @@ class TestDelete:
         resp2 = client.get(f"/api/debate/{debate_id}", headers=_auth(token))
         assert resp2.status_code == 404
 
+    def test_delete_waits_for_running_debate_cleanup(self, client):
+        from main import _debate_tasks
+        from debate_flow import _active_flows
+
+        started, cleaned_up = Event(), Event()
+
+        async def kickoff():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await asyncio.sleep(0)
+                cleaned_up.set()
+
+        token = _register(client)
+        with patch("main.DebateFlow.kickoff_async", side_effect=kickoff):
+            debate_id = _create(client, token)
+            assert started.wait(2)
+            response = client.delete(f"/api/debate/{debate_id}", headers=_auth(token))
+
+        assert response.status_code == 200
+        assert cleaned_up.is_set()
+        assert debate_id not in _debate_tasks
+        assert debate_id not in _active_flows
+
     def test_not_found(self, client):
         token = _register(client)
         resp = client.delete("/api/debate/nonexistent", headers=_auth(token))
@@ -173,6 +242,8 @@ class TestRedisIntegration:
         mock_cache.get_batch_verdicts = AsyncMock(return_value=None)
 
         token = _register(client)
+        _seed_debate(token, "d1")
+        _seed_debate(token, "d2")
         with patch("main.get_redis", return_value=mock_cache):
             resp = client.get("/api/debate/speeches/batch?ids=d1,d2", headers=_auth(token))
 
@@ -187,16 +258,17 @@ class TestRedisIntegration:
         mock_cache = MagicMock()
         mock_cache.enabled = True
         mock_cache.get_batch_summaries = AsyncMock(return_value={
-            "d1": [{"debater": "pro_1", "content": "Hi"}],
+            "verdict-id": [{"debater": "pro_1", "content": "Hi"}],
         })
         mock_cache.get_batch_verdicts = AsyncMock(return_value={
-            "d1": {"verdict": {"winner": "pro", "summary": "win"}, "winner": "pro"},
+            "verdict-id": {"verdict": {"winner": "pro", "summary": "win"}, "winner": "pro"},
         })
 
         token = _register(client)
+        _seed_debate(token, "verdict-id")
         with patch("main.get_redis", return_value=mock_cache):
             resp = client.get(
-                "/api/debate/speeches/batch?ids=d1",
+                "/api/debate/speeches/batch?ids=verdict-id",
                 headers=_auth(token),
             )
 
@@ -204,9 +276,9 @@ class TestRedisIntegration:
         data = resp.json()
         assert "speeches" in data
         assert "verdicts" in data
-        assert "d1" in data["verdicts"]
-        assert data["verdicts"]["d1"]["winner"] == "pro"
-        assert data["verdicts"]["d1"]["verdict"]["winner"] == "pro"
+        assert "verdict-id" in data["verdicts"]
+        assert data["verdicts"]["verdict-id"]["winner"] == "pro"
+        assert data["verdicts"]["verdict-id"]["verdict"]["winner"] == "pro"
 
     def test_batch_endpoint_falls_back_to_sqlite(self, client):
         """When Redis misses all, batch endpoint falls back to SQLite."""

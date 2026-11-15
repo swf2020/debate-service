@@ -91,7 +91,7 @@ FastAPI POST /api/debate/start (auth required)
 - **`auth.py`**: JWT auth with bcrypt password hashing. `create_access_token` / `decode_access_token` (HS256, 24h expiry). `get_current_user` FastAPI dependency: extracts JWT from `Authorization: Bearer` header or `?token=` query param (for SSE). `get_admin_user` dependency for admin routes. `JWT_SECRET_KEY` from env or auto-generated (warns on auto-gen).
 - **`sse_bridge.py`**: Singleton `SSEBridge` — `push()` is thread-safe (`call_soon_threadsafe`), `subscribe()`/`unsubscribe()` manage per-debate asyncio.Queues. `remove_debate()` pushes module-level `_SHUTDOWN` sentinel to all subscriber queues before dropping them, so blocked `q.get()` calls wake immediately instead of timing out — prevents TCP CLOSE_WAIT accumulation. Module-level `sse_bridge` instance and `_SHUTDOWN` sentinel imported everywhere.
 - **`models.py`**: All Pydantic models including `DebateState(FlowState)` (crewAI requires FlowState subclass, now 4v4 debaters), request/response models, SSE event models (14 types), and auth models. SSE events: `phase_start`, `thinking_chunk`, `speech_chunk`, `cross_q_chunk`, `cross_a_chunk`, `phase_end`, `verdict_chunk`, `paused`, `resumed`, `state_snapshot`, `debater_status_change`, `debate_end`, `error`, `history_replay`. All SSE models use Literal `type` fields for JSON dispatch.
-- **`db.py`**: aiosqlite with WAL mode + foreign keys. Three tables: `users` (id, username, password_hash, is_admin, created_at) and `debates` (topic, format, status, pro_skills/con_skills/judge_skill as JSON TEXT, winner, verdict as JSON TEXT, debater_status as JSON TEXT, user_id FK, timestamps) and `speeches` (debate_id FK, debater, phase, round_num, thinking, content, seq, speech_type). Auto-migration: adds `format`, `current_debater`, `debater_status`, `user_id` columns to debates; `speech_type` to speeches. Default admin account: admin/1234.
+- **`db.py`**: aiosqlite with WAL mode + foreign keys. Three tables: `users` (id, username, password_hash, is_admin, created_at) and `debates` (topic, format, status, pro_skills/con_skills/judge_skill as JSON TEXT, winner, verdict as JSON TEXT, debater_status as JSON TEXT, user_id FK, timestamps) and `speeches` (debate_id FK, debater, phase, round_num, thinking, content, seq, speech_type). Auto-migration: adds `format`, `current_debater`, `debater_status`, `user_id` columns to debates; `speech_type` to speeches.
 - **`skill_loader.py`**: Dual-dir scan: project `skills/` (15 persona perspective skills at repo root) first, then `~/.claude/skills/*-perspective/SKILL.md` fallback. Dedup by skill name (project dir wins). `_scan_dir()` helper parses SKILL.md frontmatter. `get_available_skills()` lists all, `get_skill_content(name)` loads by name, `build_backstory_with_skill()` appends to agent backstory.
 - **`redis_cache.py`**: Async Redis cache layer (`redis.asyncio.Redis`) with singleton via `get_redis()`. Triple-key pattern per debate: `debate:{id}:speeches` (full) + `debate:{id}:summary` (no thinking field) + `debate:{id}:verdict` (judge verdict + winner). 24h TTL, allkeys-lru eviction on server side. `max_connections=10` pool. `cache_speeches()` / `get_speeches()` / `get_speeches_summary()` for speech data. `cache_verdict()` / `get_verdict()` for judge verdict. `get_batch_summaries()` / `get_batch_verdicts()` use Redis pipeline for batch reads. `invalidate_debate()` deletes all 3 keys on debate deletion. All methods gracefully degrade — errors logged, never raised, return `None` on miss so SQLite fallback kicks in. Module-level singleton created once from `REDIS_URL` env var.
 
@@ -168,6 +168,18 @@ JWT_SECRET_KEY=<random-secret>
 JWT_EXPIRE_HOURS=24
 ADMIN_USERS=admin,user2
 ```
+
+### Administrator provisioning
+
+Run `python provision_admin.py admin` on the service host with the same
+`DEBATE_DB_PATH` as the service. The command prompts for a password and can also
+reset credentials for an existing administrator. `ADMIN_USERS` reserves
+usernames for provisioning. Public registration creates regular users.
+
+When upgrading an existing deployment, configure a strong, persistent
+`JWT_SECRET_KEY` and rotate any previously shared or example value. Review
+administrator accounts created before this change and reset the legacy admin
+account using the provisioning command. Administrators must sign in again.
 
 ### Redis cache layer
 

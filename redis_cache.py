@@ -24,7 +24,7 @@ SUMMARY_FIELDS = {"id", "debate_id", "debater", "phase", "round_num",
                   "content", "seq", "speech_type", "role_id"}
 
 
-def _make_summary(speech: dict) -> dict:
+def speech_summary(speech: dict) -> dict:
     """Strip thinking and created_at fields to produce a lightweight summary."""
     return {k: v for k, v in speech.items() if k in SUMMARY_FIELDS}
 
@@ -96,7 +96,7 @@ class RedisCache:
 
             full_json = json.dumps(speeches, ensure_ascii=False)
             summary_json = json.dumps(
-                [_make_summary(s) for s in speeches],
+                [speech_summary(s) for s in speeches],
                 ensure_ascii=False,
             )
 
@@ -268,3 +268,11 @@ def get_redis(redis_url: str | None = None) -> RedisCache:
         url = redis_url if redis_url is not None else os.environ.get("REDIS_URL", "")
         _redis_cache = RedisCache(redis_url=url)
     return _redis_cache
+
+
+async def close_redis() -> None:
+    """Close and discard the pool before its event loop shuts down."""
+    global _redis_cache
+    cache, _redis_cache = _redis_cache, None
+    if cache is not None:
+        await cache.close()
