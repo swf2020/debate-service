@@ -395,3 +395,17 @@ class TestGlobalSingleton:
 
         result = redis_cache.get_redis("redis://other:6379/0")
         assert result is existing
+
+
+@pytest.mark.asyncio
+async def test_close_redis_discards_pool(monkeypatch):
+    import redis_cache
+
+    cache = MagicMock()
+    cache.close = AsyncMock()
+    monkeypatch.setattr(redis_cache, "_redis_cache", cache)
+
+    await redis_cache.close_redis()
+
+    cache.close.assert_awaited_once()
+    assert redis_cache.get_redis("") is not cache

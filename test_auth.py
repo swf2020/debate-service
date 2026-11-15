@@ -4,8 +4,10 @@ Tests for auth module and auth endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,14 +16,17 @@ _tmp_db = tempfile.mktemp(suffix=".auth_test.db")
 os.environ["DEBATE_DB_PATH"] = _tmp_db
 os.environ["DEEPSEEK_API_KEY"] = "test-key-mock"
 os.environ["ADMIN_USERS"] = "admin,root"
-os.environ["JWT_SECRET_KEY"] = "test-jwt-secret-key-for-testing"
+os.environ.setdefault("JWT_SECRET_KEY", "debate-service-test-key-at-least-32-bytes")
 
 from main import app  # noqa: E402
+from auth import hash_password
+from db import provision_admin
 
 
 @pytest.fixture(scope="module")
 def client():
     with TestClient(app) as c:
+        asyncio.run(provision_admin("admin", hash_password("test-admin-password")))
         yield c
 
 
@@ -36,14 +41,12 @@ class TestRegister:
         assert data["user"]["username"] == "alice"
         assert data["user"]["is_admin"] is False
 
-    def test_register_admin_user(self, client):
-        """A user listed in ADMIN_USERS env var becomes admin on registration."""
+    def test_register_cannot_claim_reserved_admin_name(self, client):
+        """A configured administrator username is reserved from public registration."""
         resp = client.post("/api/auth/register", json={
             "username": "root", "password": "root1234"
         })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["user"]["is_admin"] is True
+        assert resp.status_code == 403
 
     def test_register_duplicate(self, client):
         resp = client.post("/api/auth/register", json={
@@ -88,10 +91,10 @@ class TestLogin:
 
 
 class TestDefaultAdmin:
-    def test_default_admin_login(self, client):
-        """The default admin account (admin/1234) seeded by init_db can log in."""
+    def test_provisioned_admin_login(self, client):
+        """Administrator credentials are provisioned locally."""
         resp = client.post("/api/auth/login", json={
-            "username": "admin", "password": "1234"
+            "username": "admin", "password": "test-admin-password"
         })
         assert resp.status_code == 200
         data = resp.json()
@@ -99,11 +102,15 @@ class TestDefaultAdmin:
         assert data["user"]["username"] == "admin"
         assert data["user"]["is_admin"] is True
 
-    def test_default_admin_wrong_password(self, client):
-        """Default admin login with wrong password returns 401."""
-        resp = client.post("/api/auth/login", json={
-            "username": "admin", "password": "wrong"
-        })
+    def test_old_default_password_is_rejected(self, client):
+        """Simulate a deployment with the original seeded account."""
+        with patch("main.get_user_by_username", return_value={
+            "id": "admin-001", "username": "admin", "is_admin": 1,
+            "password_hash": hash_password("1234"),
+        }):
+            resp = client.post("/api/auth/login", json={
+                "username": "admin", "password": "1234"
+            })
         assert resp.status_code == 401
 
 
@@ -166,7 +173,7 @@ class TestAdminPageAccess:
     def test_admin_page_accessible_for_admin(self, client):
         """An admin user must be able to access /admin."""
         resp = client.post("/api/auth/login", json={
-            "username": "admin", "password": "1234"
+            "username": "admin", "password": "test-admin-password"
         })
         token = resp.json()["token"]
 
@@ -189,10 +196,19 @@ class TestAdminPageAccess:
             f"Non-admin user is_admin should be False, got {data['user']['is_admin']}"
         )
 
+    def test_legacy_admin_token_cannot_access_admin_api(self, client):
+        import jwt
+        from auth import JWT_ALGORITHM, JWT_SECRET_KEY
+
+        token = jwt.encode({"sub": "admin-001", "username": "admin", "is_admin": True},
+                           JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+        response = client.get("/api/admin/users", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 403
+
     def test_admin_user_has_is_admin_true_in_me(self, client):
         """The /api/auth/me endpoint must return is_admin=True for admin users."""
         resp = client.post("/api/auth/login", json={
-            "username": "admin", "password": "1234"
+            "username": "admin", "password": "test-admin-password"
         })
         token = resp.json()["token"]
 

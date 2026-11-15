@@ -72,7 +72,7 @@ from models import (
     StartDebateResponse,
     UserInfo,
 )
-from redis_cache import get_redis
+from redis_cache import close_redis, get_redis, speech_summary
 from skill_loader import list_available_skills
 from sse_bridge import _SHUTDOWN, sse_bridge
 
@@ -88,13 +88,21 @@ async def lifespan(app: FastAPI):
     await init_db()
     sse_bridge.set_loop(asyncio.get_event_loop())
     get_redis()  # Init Redis singleton (gracefully degrades if unavailable)
-    yield
-    # Shutdown: close Redis connection pool
-    cache = get_redis()
-    await cache.close()
+    try:
+        yield
+    finally:
+        tasks = list(_debate_tasks.values())
+        for task in tasks:
+            if not task.cancelling():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        _debate_tasks.clear()
+        _active_flows.clear()
+        await close_redis()
 
 
 app = FastAPI(title="Debate Service", lifespan=lifespan)
+_debate_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -154,14 +162,17 @@ async def register(req: RegisterRequest):
     if existing:
         raise HTTPException(status_code=409, detail="Username already exists")
 
-    is_admin = req.username in os.environ.get("ADMIN_USERS", "").split(",")
-    hashed = hash_password(req.password)
-    user_id = await create_user(req.username, hashed, is_admin)
+    reserved = {"admin", *(name.strip() for name in os.getenv("ADMIN_USERS", "").split(","))}
+    if req.username in reserved:
+        raise HTTPException(status_code=403, detail="Reserved username")
 
-    token = create_access_token(user_id, req.username, is_admin)
+    hashed = hash_password(req.password)
+    user_id = await create_user(req.username, hashed)
+
+    token = create_access_token(user_id, req.username, False)
     return AuthResponse(
         token=token,
-        user=UserInfo(id=user_id, username=req.username, is_admin=is_admin),
+        user=UserInfo(id=user_id, username=req.username, is_admin=False),
     )
 
 
@@ -169,7 +180,11 @@ async def register(req: RegisterRequest):
 async def login(req: LoginRequest):
     """Authenticate user and return JWT token."""
     user = await get_user_by_username(req.username)
-    if not user or not verify_password(req.password, user["password_hash"]):
+    if (
+        not user
+        or (user["id"] == "admin-001" and req.password == "1234")
+        or not verify_password(req.password, user["password_hash"])
+    ):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = create_access_token(user["id"], user["username"], bool(user["is_admin"]))
@@ -260,7 +275,7 @@ async def start_debate(req: StartDebateRequest, current_user: dict = Depends(get
     _active_flows[debate_id] = flow
 
     # Launch Flow in background
-    asyncio.create_task(_run_debate(debate_id, flow))
+    _debate_tasks[debate_id] = asyncio.create_task(_run_debate(debate_id, flow))
 
     return StartDebateResponse(debate_id=debate_id, status="running")
 
@@ -294,6 +309,7 @@ async def _run_debate(debate_id: str, flow: DebateFlow):
             # except Exception above).
             sse_bridge.remove_debate(debate_id)
             _active_flows.pop(debate_id, None)
+            _debate_tasks.pop(debate_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -325,9 +341,16 @@ async def delete_debate(debate_id: str, current_user: dict = Depends(get_current
     """Delete a debate and its speeches. Owner or admin only."""
     await _verify_ownership_or_admin(debate_id, current_user)
 
-    flow = _active_flows.pop(debate_id, None)
-    if flow:
-        sse_bridge.remove_debate(debate_id)
+    task = _debate_tasks.get(debate_id)
+    if task is not None:
+        # Keep the task registered until cancellation cleanup finishes.
+        # A concurrent delete should also wait before touching the database.
+        if not task.cancelling():
+            task.cancel()
+        await asyncio.gather(asyncio.shield(task), return_exceptions=True)
+        _debate_tasks.pop(debate_id, None)
+    _active_flows.pop(debate_id, None)
+    sse_bridge.remove_debate(debate_id)
 
     await db_delete_debate(debate_id)
 
@@ -568,10 +591,19 @@ async def batch_speeches(ids: str = "", current_user: dict = Depends(get_current
     Tries Redis first for each debate; falls back to SQLite for misses
     and backfills the cache.
     """
-    debate_ids = [did.strip() for did in ids.split(",") if did.strip()]
-    if not debate_ids:
+    requested_ids = dict.fromkeys(did.strip() for did in ids.split(",") if did.strip())
+    debates = {}
+    for did in requested_ids:
+        try:
+            debates[did] = await _verify_ownership_or_admin(did, current_user)
+        except HTTPException as exc:
+            if exc.status_code not in (403, 404):
+                raise
+
+    if not debates:
         return {"speeches": {}, "verdicts": {}}
 
+    debate_ids = list(debates)
     cache = get_redis()
     result: dict[str, list[dict]] = {}
     all_ids = list(debate_ids)  # preserve full list for verdict phase
@@ -590,7 +622,7 @@ async def batch_speeches(ids: str = "", current_user: dict = Depends(get_current
             rows = await get_speeches(did)
             rows = [dict(r) for r in rows]
             if rows:
-                result[did] = rows
+                result[did] = [speech_summary(row) for row in rows]
                 # Backfill cache asynchronously
                 if cache.enabled:
                     await cache.cache_speeches(did, rows)
@@ -611,14 +643,13 @@ async def batch_speeches(ids: str = "", current_user: dict = Depends(get_current
     # Phase V2: SQLite fallback for verdicts
     for did in remaining_vids:
         try:
-            debate = await get_debate(did)
-            if debate:
-                v = debate.get("verdict")
-                w = debate.get("winner")
-                if v:
-                    verdicts[did] = {"verdict": v, "winner": w or ""}
-                    if cache.enabled:
-                        await cache.cache_verdict(did, v, w or "")
+            debate = debates[did]
+            verdict = debate.get("verdict")
+            winner = debate.get("winner") or ""
+            if verdict:
+                verdicts[did] = {"verdict": verdict, "winner": winner}
+                if cache.enabled:
+                    await cache.cache_verdict(did, verdict, winner)
         except Exception:
             pass
 

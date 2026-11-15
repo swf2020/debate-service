@@ -14,13 +14,16 @@ import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, Request
 
-JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", secrets.token_hex(32))
+_configured_secret = os.getenv("JWT_SECRET_KEY")
+if _configured_secret == "change-me-to-a-random-secret":
+    _configured_secret = None
+JWT_SECRET_KEY = _configured_secret or secrets.token_hex(32)
 JWT_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "24"))
 JWT_ALGORITHM = "HS256"
 
-if not os.environ.get("JWT_SECRET_KEY"):
+if not _configured_secret:
     warnings.warn(
-        "JWT_SECRET_KEY not set. Using random key — all tokens invalid on restart.",
+        "JWT_SECRET_KEY missing or using the deployment example. Using random key — all tokens invalid on restart.",
         RuntimeWarning,
     )
 
@@ -42,6 +45,7 @@ def create_access_token(user_id: str, username: str, is_admin: bool) -> str:
         "sub": user_id,
         "username": username,
         "is_admin": is_admin,
+        "auth_version": 2,
         "iat": now,
         "exp": now + timedelta(hours=JWT_EXPIRE_HOURS),
     }
@@ -81,7 +85,7 @@ async def get_current_user(request: Request) -> dict:
     return {
         "user_id": payload["sub"],
         "username": payload["username"],
-        "is_admin": payload.get("is_admin", False),
+        "is_admin": payload.get("is_admin", False) and payload.get("auth_version") == 2,
     }
 
 

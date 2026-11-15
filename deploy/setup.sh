@@ -33,12 +33,13 @@ pip install -r requirements.txt
 
 echo "=== Create env file ==="
 if [ ! -f /etc/default/debate-env ]; then
-    cat > /etc/default/debate-env << 'EOF'
+    jwt_secret=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+    cat > /etc/default/debate-env << EOF
 DEEPSEEK_API_KEY=sk-your-key-here
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 ADMIN_USERS=admin
 DEBATE_DB_PATH=/opt/debate-service/debate.db
-JWT_SECRET_KEY=change-me-to-a-random-secret
+JWT_SECRET_KEY=$jwt_secret
 REDIS_URL=redis://localhost:6379/0
 EOF
     chmod 600 /etc/default/debate-env

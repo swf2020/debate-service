@@ -30,7 +30,7 @@ from debate_flow import _active_flows
 from sse_bridge import sse_bridge
 
 # Import the app after env vars are set so the lifespan sees the test DB path.
-from main import app  # noqa: E402
+from main import _debate_tasks, app  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -42,6 +42,7 @@ def auto_cleanup():
     """Reset global state between every test."""
     yield
     _active_flows.clear()
+    _debate_tasks.clear()
     sse_bridge._queues.clear()
     sse_bridge._loop = None
 
@@ -117,7 +118,7 @@ class TestStartDebate:
         mock_flow = MagicMock()
         mock_flow.state = MagicMock()
         mock_flow_cls.return_value = mock_flow
-        mock_create_task.return_value = None
+        mock_create_task.side_effect = lambda coroutine: coroutine.close()
 
         payload = {"topic": "人工智能是否对人类有益", "rounds": 1}
         response = client.post("/api/debate/start", json=payload, headers=auth_headers)
@@ -140,7 +141,7 @@ class TestStartDebate:
         mock_flow = MagicMock()
         mock_flow.state = MagicMock()
         mock_flow_cls.return_value = mock_flow
-        mock_create_task.return_value = None
+        mock_create_task.side_effect = lambda coroutine: coroutine.close()
 
         payload = {
             "topic": "AI safety",
